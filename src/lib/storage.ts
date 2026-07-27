@@ -33,6 +33,25 @@ import {
 } from './mockData';
 import { getSupabaseClient } from './supabase';
 
+// Helper utilities for UUID validation and FK sanitization
+const isUUID = (val: string | undefined | null): boolean => {
+  if (!val) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+};
+
+const toValidUuidOrNull = (val: string | undefined | null): string | null => {
+  if (!val || typeof val !== 'string') return null;
+  const trimmed = val.trim();
+  return isUUID(trimmed) ? trimmed : null;
+};
+
+const ensureValidUuid = (val: string | undefined | null): string => {
+  if (val && typeof val === 'string' && isUUID(val.trim())) {
+    return val.trim();
+  }
+  return crypto.randomUUID();
+};
+
 class StorageService {
   private listeners: Set<() => void> = new Set();
 
@@ -41,7 +60,6 @@ class StorageService {
   }
 
   private initLocalStorage() {
-    // Clear old mock data if present
     if (!localStorage.getItem('cr_v3_clean')) {
       localStorage.removeItem('cr_profiles');
       localStorage.removeItem('cr_equipment');
@@ -136,16 +154,19 @@ class StorageService {
     oldValue?: string,
     newValue?: string
   ) {
+    const validId = crypto.randomUUID();
+    const validUserId = toValidUuidOrNull(currentUser?.id);
+
     const newLog: AuditLog = {
-      id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      user_id: currentUser?.id || 'sys-anon',
+      id: validId,
+      user_id: validUserId || currentUser?.id || 'sys-anon',
       user_name: currentUser?.full_name || 'Sistema / Convidado',
       user_email: currentUser?.email || 'sistema@colegioreacaodf.com',
       action,
       module,
       target_record: targetRecord,
-      old_value: oldValue,
-      new_value: newValue,
+      old_value: oldValue || undefined,
+      new_value: newValue || undefined,
       ip_address: '187.52.190.' + Math.floor(Math.random() * 200 + 10),
       created_at: new Date().toISOString()
     };
@@ -153,7 +174,19 @@ class StorageService {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('audit_logs').insert([newLog]);
+        await supabase.from('audit_logs').insert([{
+          id: validId,
+          user_id: validUserId,
+          user_name: newLog.user_name,
+          user_email: newLog.user_email,
+          action: newLog.action,
+          module: newLog.module,
+          target_record: newLog.target_record,
+          old_value: newLog.old_value || null,
+          new_value: newLog.new_value || null,
+          ip_address: newLog.ip_address || null,
+          created_at: newLog.created_at
+        }]);
       } catch (err) {
         console.warn('Supabase audit log insert fallback:', err);
       }
@@ -179,27 +212,117 @@ class StorageService {
     this.notify();
   }
 
-  // --- PROFILES & USERS ---
-  public async getProfiles(): Promise<UserProfile[]> {
+  // Clean payload helper for auto-seeding to Supabase
+  private sanitizeItemForSupabase(item: any): any {
+    const cleaned = { ...item };
+    cleaned.id = ensureValidUuid(cleaned.id);
+
+    if ('user_id' in cleaned) cleaned.user_id = toValidUuidOrNull(cleaned.user_id);
+    if ('equipment_id' in cleaned) cleaned.equipment_id = toValidUuidOrNull(cleaned.equipment_id);
+    if ('assigned_to' in cleaned) cleaned.assigned_to = toValidUuidOrNull(cleaned.assigned_to);
+    if ('created_by' in cleaned) cleaned.created_by = toValidUuidOrNull(cleaned.created_by);
+    if ('requested_by' in cleaned) cleaned.requested_by = toValidUuidOrNull(cleaned.requested_by);
+    if ('reviewed_by' in cleaned) cleaned.reviewed_by = toValidUuidOrNull(cleaned.reviewed_by);
+    if ('responsible_id' in cleaned) cleaned.responsible_id = toValidUuidOrNull(cleaned.responsible_id);
+    if ('requester_id' in cleaned) cleaned.requester_id = toValidUuidOrNull(cleaned.requester_id);
+    if ('funcionario_id' in cleaned) cleaned.funcionario_id = toValidUuidOrNull(cleaned.funcionario_id);
+
+    // Fallbacks for non-null requirements
+    if ('title' in cleaned && (cleaned.title === undefined || cleaned.title === null)) cleaned.title = 'Item';
+    if ('name' in cleaned && (cleaned.name === undefined || cleaned.name === null)) cleaned.name = 'Equipamento';
+    if ('description' in cleaned && (cleaned.description === undefined || cleaned.description === null)) cleaned.description = '';
+    if ('sector' in cleaned && (cleaned.sector === undefined || cleaned.sector === null)) cleaned.sector = 'Geral';
+    if ('email' in cleaned && (cleaned.email === undefined || cleaned.email === null)) cleaned.email = 'usuario@colegioreacaodf.com';
+    if ('full_name' in cleaned && (cleaned.full_name === undefined || cleaned.full_name === null)) cleaned.full_name = 'Usuário';
+    if ('role' in cleaned && (cleaned.role === undefined || cleaned.role === null)) cleaned.role = 'operador';
+    if ('department' in cleaned && (cleaned.department === undefined || cleaned.department === null)) cleaned.department = 'Geral';
+    if ('category' in cleaned && (cleaned.category === undefined || cleaned.category === null)) cleaned.category = 'outro';
+    if ('priority' in cleaned && (cleaned.priority === undefined || cleaned.priority === null)) cleaned.priority = 'media';
+    if ('status' in cleaned && (cleaned.status === undefined || cleaned.status === null)) cleaned.status = 'aberta';
+    if ('type' in cleaned && (cleaned.type === undefined || cleaned.type === null)) cleaned.type = 'Outro';
+    if ('room_location' in cleaned && (cleaned.room_location === undefined || cleaned.room_location === null)) cleaned.room_location = 'Almoxarifado';
+    if ('created_by_name' in cleaned && (cleaned.created_by_name === undefined || cleaned.created_by_name === null)) cleaned.created_by_name = 'Sistema';
+    if ('requested_by_name' in cleaned && (cleaned.requested_by_name === undefined || cleaned.requested_by_name === null)) cleaned.requested_by_name = 'Solicitante';
+    if ('requester_name' in cleaned && (cleaned.requester_name === undefined || cleaned.requester_name === null)) cleaned.requester_name = 'Solicitante';
+    if ('user_name' in cleaned && (cleaned.user_name === undefined || cleaned.user_name === null)) cleaned.user_name = 'Sistema';
+    if ('user_email' in cleaned && (cleaned.user_email === undefined || cleaned.user_email === null)) cleaned.user_email = 'sistema@colegioreacaodf.com';
+
+    return cleaned;
+  }
+
+  // Helper method to fetch from Supabase if configured, otherwise fallback to local storage
+  private async fetchFromSupabaseOrCache<T>(
+    tableName: string,
+    cacheKey: string,
+    initialSeedData: T[],
+    orderBy: string = 'created_at',
+    ascending: boolean = false
+  ): Promise<T[]> {
     const supabase = getSupabaseClient();
     if (supabase) {
-      const { data, error } = await supabase.from('profiles').select('*');
-      if (!error && data && data.length > 0) return data as UserProfile[];
+      try {
+        const { data, error } = await supabase.from(tableName).select('*').order(orderBy, { ascending });
+        if (!error && data) {
+          if (data.length > 0) {
+            this.setItem(cacheKey, data as T[]);
+            return data as T[];
+          } else {
+            // Table in Supabase is empty (0 rows). Check if we have seed/local data to migrate to Supabase.
+            const localItems = this.getItem<T>(cacheKey);
+            const itemsToSeed = localItems && localItems.length > 0 ? localItems : initialSeedData;
+            if (itemsToSeed && itemsToSeed.length > 0) {
+              const sanitizedSeed = itemsToSeed.map((it) => this.sanitizeItemForSupabase(it));
+              const { error: seedErr } = await supabase.from(tableName).insert(sanitizedSeed as any);
+              if (!seedErr) {
+                this.setItem(cacheKey, itemsToSeed);
+                return itemsToSeed;
+              } else {
+                console.warn(`Supabase auto-seed warning for ${tableName}:`, seedErr.message);
+              }
+            }
+            this.setItem(cacheKey, []);
+            return [];
+          }
+        } else if (error) {
+          console.warn(`Supabase query warning for ${tableName}:`, error.message);
+        }
+      } catch (err) {
+        console.warn(`Supabase exception for ${tableName}:`, err);
+      }
     }
-    return this.getItem<UserProfile>('cr_profiles');
+    return this.getItem<T>(cacheKey);
+  }
+
+  // --- PROFILES & USERS ---
+  public async getProfiles(): Promise<UserProfile[]> {
+    return this.fetchFromSupabaseOrCache<UserProfile>('profiles', 'cr_profiles', INITIAL_PROFILES, 'created_at', false);
   }
 
   public async addProfile(profile: Omit<UserProfile, 'id' | 'created_at'>, actor: UserProfile | null): Promise<UserProfile> {
+    const validId = crypto.randomUUID();
     const newProfile: UserProfile = {
       ...profile,
-      id: `user-${Date.now()}`,
+      id: validId,
+      full_name: profile.full_name || 'Usuário Sem Nome',
+      role: profile.role || 'operador',
+      department: profile.department || 'Geral',
+      is_active: profile.is_active ?? true,
       created_at: new Date().toISOString()
     };
 
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('profiles').insert([newProfile]);
+        await supabase.from('profiles').insert([{
+          id: newProfile.id,
+          email: newProfile.email,
+          full_name: newProfile.full_name,
+          role: newProfile.role,
+          department: newProfile.department,
+          avatar_url: newProfile.avatar_url || null,
+          is_active: newProfile.is_active,
+          created_at: newProfile.created_at
+        }]);
       } catch (e) {
         console.warn('Supabase profile add error:', e);
       }
@@ -222,7 +345,7 @@ class StorageService {
       this.setItem('cr_profiles', profiles);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(userId)) {
         await supabase.from('profiles').update({ role: newRole }).eq('id', userId);
       }
 
@@ -246,7 +369,7 @@ class StorageService {
       this.setItem('cr_profiles', profiles);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(userId)) {
         await supabase.from('profiles').update({ is_active: !oldVal }).eq('id', userId);
       }
 
@@ -263,21 +386,22 @@ class StorageService {
 
   // --- SERVICE ORDERS ---
   public async getServiceOrders(): Promise<ServiceOrder[]> {
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      const { data, error } = await supabase.from('service_orders').select('*').order('created_at', { ascending: false });
-      if (!error && data && data.length > 0) return data as ServiceOrder[];
-    }
-    return this.getItem<ServiceOrder>('cr_service_orders');
+    return this.fetchFromSupabaseOrCache<ServiceOrder>('service_orders', 'cr_service_orders', INITIAL_SERVICE_ORDERS, 'created_at', false);
   }
 
   public async addServiceOrder(
     so: Omit<ServiceOrder, 'id' | 'created_at' | 'updated_at' | 'comments'>,
     actor: UserProfile | null
   ): Promise<ServiceOrder> {
+    const validId = crypto.randomUUID();
     const newSO: ServiceOrder = {
       ...so,
-      id: `os-${Date.now().toString().slice(-4)}`,
+      id: validId,
+      description: so.description || '',
+      category: so.category || 'outro',
+      priority: so.priority || 'media',
+      status: so.status || 'aberta',
+      sector: so.sector || 'Geral',
       comments: [],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -286,7 +410,31 @@ class StorageService {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('service_orders').insert([newSO]);
+        await supabase.from('service_orders').insert([{
+          id: newSO.id,
+          title: newSO.title,
+          description: newSO.description,
+          category: newSO.category,
+          priority: newSO.priority,
+          status: newSO.status,
+          sector: newSO.sector,
+          location: newSO.location || null,
+          observation: newSO.observation || null,
+          equipment_id: toValidUuidOrNull(newSO.equipment_id),
+          equipment_name: newSO.equipment_name || null,
+          assigned_to: toValidUuidOrNull(newSO.assigned_to),
+          assigned_to_name: newSO.assigned_to_name || null,
+          created_by: toValidUuidOrNull(newSO.created_by),
+          created_by_name: newSO.created_by_name || actor?.full_name || 'Sistema',
+          photo_url: newSO.photo_url || null,
+          foto_abertura_url: newSO.foto_abertura_url || null,
+          foto_conclusao_url: newSO.foto_conclusao_url || null,
+          concluded_at: newSO.concluded_at || null,
+          concluded_notes: newSO.concluded_notes || null,
+          comments: newSO.comments || [],
+          created_at: newSO.created_at,
+          updated_at: newSO.updated_at
+        }]);
       } catch (e) {
         console.warn('Supabase OS insert error:', e);
       }
@@ -310,7 +458,7 @@ class StorageService {
       this.setItem('cr_service_orders', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(soId)) {
         await supabase.from('service_orders').update({ status, updated_at: items[idx].updated_at }).eq('id', soId);
       }
 
@@ -336,8 +484,12 @@ class StorageService {
       this.setItem('cr_service_orders', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
-        await supabase.from('service_orders').update({ assigned_to: assignedToId, updated_at: items[idx].updated_at }).eq('id', soId);
+      if (supabase && isUUID(soId)) {
+        await supabase.from('service_orders').update({
+          assigned_to: toValidUuidOrNull(assignedToId),
+          assigned_to_name: assignedToName || null,
+          updated_at: items[idx].updated_at
+        }).eq('id', soId);
       }
 
       await this.logAudit(
@@ -356,7 +508,7 @@ class StorageService {
     const idx = items.findIndex((i) => i.id === soId);
     if (idx !== -1) {
       const newComment = {
-        id: `c-${Date.now()}`,
+        id: crypto.randomUUID(),
         user_name: actor?.full_name || 'Usuário',
         user_avatar: actor?.avatar_url,
         comment: commentText,
@@ -367,7 +519,7 @@ class StorageService {
       this.setItem('cr_service_orders', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(soId)) {
         await supabase.from('service_orders').update({ comments: items[idx].comments, updated_at: items[idx].updated_at }).eq('id', soId);
       }
     }
@@ -392,13 +544,13 @@ class StorageService {
       this.setItem('cr_service_orders', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(soId)) {
         await supabase
           .from('service_orders')
           .update({
             status: 'concluida',
-            concluded_notes: concludedNotes,
-            foto_conclusao_url: fotoConclusaoUrl,
+            concluded_notes: concludedNotes || null,
+            foto_conclusao_url: fotoConclusaoUrl || null,
             concluded_at: items[idx].concluded_at,
             updated_at: items[idx].updated_at
           })
@@ -424,7 +576,7 @@ class StorageService {
       this.setItem('cr_service_orders', filtered);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(soId)) {
         await supabase.from('service_orders').delete().eq('id', soId);
       }
 
@@ -434,25 +586,37 @@ class StorageService {
 
   // --- EQUIPMENT ---
   public async getEquipment(): Promise<Equipment[]> {
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      const { data, error } = await supabase.from('equipments').select('*').order('created_at', { ascending: false });
-      if (!error && data && data.length > 0) return data as Equipment[];
-    }
-    return this.getItem<Equipment>('cr_equipment');
+    return this.fetchFromSupabaseOrCache<Equipment>('equipments', 'cr_equipment', INITIAL_EQUIPMENT, 'created_at', false);
   }
 
   public async addEquipment(eq: Omit<Equipment, 'id' | 'created_at'>, actor: UserProfile | null): Promise<Equipment> {
+    const validId = crypto.randomUUID();
     const newEq: Equipment = {
       ...eq,
-      id: `eq-${Date.now().toString().slice(-4)}`,
+      id: validId,
+      type: eq.type || 'Outro',
+      asset_number: eq.asset_number || `PAT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+      room_location: eq.room_location || 'Almoxarifado',
+      status: eq.status || 'ativo',
       created_at: new Date().toISOString()
     };
 
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('equipments').insert([newEq]);
+        await supabase.from('equipments').insert([{
+          id: newEq.id,
+          name: newEq.name,
+          type: newEq.type,
+          asset_number: newEq.asset_number,
+          room_location: newEq.room_location,
+          acquisition_date: newEq.acquisition_date || new Date().toISOString().split('T')[0],
+          warranty_until: newEq.warranty_until || null,
+          status: newEq.status,
+          notes: newEq.notes || null,
+          foto_url: newEq.foto_url || null,
+          created_at: newEq.created_at
+        }]);
       } catch (e) {
         console.warn('Supabase equipment insert error:', e);
       }
@@ -474,7 +638,7 @@ class StorageService {
       this.setItem('cr_equipment', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(eqId)) {
         await supabase.from('equipments').update(updatedFields).eq('id', eqId);
       }
 
@@ -495,7 +659,7 @@ class StorageService {
       this.setItem('cr_equipment_loans', filteredLoans);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(eqId)) {
         await supabase.from('equipments').delete().eq('id', eqId);
         await supabase.from('emprestimos_equipamentos').delete().eq('equipment_id', eqId);
       }
@@ -513,7 +677,7 @@ class StorageService {
       this.setItem('cr_equipment', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(eqId)) {
         await supabase.from('equipments').update({ status }).eq('id', eqId);
       }
 
@@ -529,7 +693,7 @@ class StorageService {
     const supabase = getSupabaseClient();
     if (supabase) {
       let query = supabase.from('emprestimos_equipamentos').select('*').order('created_at', { ascending: false });
-      if (equipmentId) {
+      if (equipmentId && isUUID(equipmentId)) {
         query = query.eq('equipment_id', equipmentId);
       }
       const { data, error } = await query;
@@ -550,9 +714,10 @@ class StorageService {
     loan: Omit<EquipmentLoan, 'id' | 'status' | 'created_at'>,
     actor: UserProfile | null
   ): Promise<EquipmentLoan> {
+    const validId = crypto.randomUUID();
     const newLoan: EquipmentLoan = {
       ...loan,
-      id: `loan-${Date.now().toString().slice(-4)}`,
+      id: validId,
       status: 'em_aberto',
       created_at: new Date().toISOString()
     };
@@ -560,7 +725,21 @@ class StorageService {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('emprestimos_equipamentos').insert([newLoan]);
+        await supabase.from('emprestimos_equipamentos').insert([{
+          id: newLoan.id,
+          equipment_id: toValidUuidOrNull(newLoan.equipment_id),
+          equipment_name: newLoan.equipment_name || null,
+          funcionario_id: toValidUuidOrNull(newLoan.funcionario_id),
+          funcionario_nome: newLoan.funcionario_nome || 'Funcionário',
+          data_retirada: newLoan.data_retirada || new Date().toISOString(),
+          observacao_retirada: newLoan.observacao_retirada || null,
+          assinatura_retirada_url: newLoan.assinatura_retirada_url || null,
+          data_devolucao: newLoan.data_devolucao || null,
+          observacao_devolucao: newLoan.observacao_devolucao || null,
+          assinatura_devolucao_url: newLoan.assinatura_devolucao_url || null,
+          status: newLoan.status,
+          created_at: newLoan.created_at
+        }]);
       } catch (e) {
         console.warn('Supabase loan insert error:', e);
       }
@@ -603,14 +782,14 @@ class StorageService {
       this.setItem('cr_equipment_loans', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(loanId)) {
         await supabase
           .from('emprestimos_equipamentos')
           .update({
             status: 'concluido',
             data_devolucao: items[idx].data_devolucao,
-            observacao_devolucao: observacaoDevolucao,
-            assinatura_devolucao_url: assinaturaDevolucaoUrl
+            observacao_devolucao: observacaoDevolucao || null,
+            assinatura_devolucao_url: assinaturaDevolucaoUrl || null
           })
           .eq('id', loanId);
       }
@@ -631,21 +810,20 @@ class StorageService {
 
   // --- MATERIAL REQUESTS ---
   public async getMaterialRequests(): Promise<MaterialRequest[]> {
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      const { data, error } = await supabase.from('material_requests').select('*').order('created_at', { ascending: false });
-      if (!error && data && data.length > 0) return data as MaterialRequest[];
-    }
-    return this.getItem<MaterialRequest>('cr_material_requests');
+    return this.fetchFromSupabaseOrCache<MaterialRequest>('material_requests', 'cr_material_requests', INITIAL_MATERIAL_REQUESTS, 'created_at', false);
   }
 
   public async addMaterialRequest(
     req: Omit<MaterialRequest, 'id' | 'created_at' | 'status'>,
     actor: UserProfile | null
   ): Promise<MaterialRequest> {
+    const validId = crypto.randomUUID();
     const newReq: MaterialRequest = {
       ...req,
-      id: `req-${Date.now().toString().slice(-4)}`,
+      id: validId,
+      justification: req.justification || '',
+      sector: req.sector || 'Geral',
+      urgency: req.urgency || 'media',
       status: 'pendente',
       created_at: new Date().toISOString()
     };
@@ -653,7 +831,21 @@ class StorageService {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('material_requests').insert([newReq]);
+        await supabase.from('material_requests').insert([{
+          id: newReq.id,
+          title: newReq.title,
+          requested_by: toValidUuidOrNull(newReq.requested_by),
+          requested_by_name: newReq.requested_by_name || actor?.full_name || 'Solicitante',
+          sector: newReq.sector,
+          urgency: newReq.urgency,
+          justification: newReq.justification,
+          items: newReq.items || [],
+          status: newReq.status,
+          reviewed_by: toValidUuidOrNull(newReq.reviewed_by),
+          reviewed_by_name: newReq.reviewed_by_name || null,
+          review_notes: newReq.review_notes || null,
+          created_at: newReq.created_at
+        }]);
       } catch (e) {
         console.warn('Supabase material request error:', e);
       }
@@ -684,13 +876,14 @@ class StorageService {
       this.setItem('cr_material_requests', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(reqId)) {
         await supabase
           .from('material_requests')
           .update({
             status,
-            reviewed_by: actor?.id,
-            review_notes: reviewNotes
+            reviewed_by: toValidUuidOrNull(actor?.id),
+            reviewed_by_name: actor?.full_name || null,
+            review_notes: reviewNotes || null
           })
           .eq('id', reqId);
       }
@@ -714,7 +907,7 @@ class StorageService {
       this.setItem('cr_material_requests', filtered);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(reqId)) {
         await supabase.from('material_requests').delete().eq('id', reqId);
       }
 
@@ -724,28 +917,40 @@ class StorageService {
 
   // --- MARKETING ---
   public async getMarketingContent(): Promise<MarketingContent[]> {
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      const { data, error } = await supabase.from('marketing_contents').select('*').order('scheduled_date', { ascending: true });
-      if (!error && data && data.length > 0) return data as MarketingContent[];
-    }
-    return this.getItem<MarketingContent>('cr_marketing');
+    return this.fetchFromSupabaseOrCache<MarketingContent>('marketing_contents', 'cr_marketing', INITIAL_MARKETING_CONTENT, 'scheduled_date', true);
   }
 
   public async addMarketingContent(
     content: Omit<MarketingContent, 'id' | 'created_at'>,
     actor: UserProfile | null
   ): Promise<MarketingContent> {
+    const validId = crypto.randomUUID();
     const newContent: MarketingContent = {
       ...content,
-      id: `mkt-${Date.now().toString().slice(-4)}`,
+      id: validId,
+      content_type: content.content_type || 'post_estatico',
+      scheduled_date: content.scheduled_date || new Date().toISOString().split('T')[0],
+      status: content.status || 'ideia',
+      has_image_authorization: content.has_image_authorization ?? false,
       created_at: new Date().toISOString()
     };
 
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('marketing_contents').insert([newContent]);
+        await supabase.from('marketing_contents').insert([{
+          id: newContent.id,
+          title: newContent.title,
+          content_type: newContent.content_type,
+          scheduled_date: newContent.scheduled_date,
+          status: newContent.status,
+          responsible_id: toValidUuidOrNull(newContent.responsible_id),
+          responsible_name: newContent.responsible_name || null,
+          asset_link: newContent.asset_link || null,
+          has_image_authorization: newContent.has_image_authorization,
+          notes: newContent.notes || null,
+          created_at: newContent.created_at
+        }]);
       } catch (e) {
         console.warn('Supabase marketing error:', e);
       }
@@ -775,7 +980,7 @@ class StorageService {
       this.setItem('cr_marketing', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(id)) {
         await supabase.from('marketing_contents').update({ status }).eq('id', id);
       }
 
@@ -788,11 +993,34 @@ class StorageService {
   }
 
   public async addMarketingMetric(metric: Omit<MarketingMetric, 'id' | 'created_at'>, actor: UserProfile | null) {
+    const validId = crypto.randomUUID();
     const newMetric: MarketingMetric = {
       ...metric,
-      id: `met-${Date.now()}`,
+      id: validId,
+      instagram_reach: metric.instagram_reach || 0,
+      engagement_rate: metric.engagement_rate || 0,
+      followers_gained: metric.followers_gained || 0,
+      leads_generated: metric.leads_generated || 0,
       created_at: new Date().toISOString()
     };
+
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        await supabase.from('marketing_metrics').insert([{
+          id: newMetric.id,
+          period_label: newMetric.period_label,
+          instagram_reach: newMetric.instagram_reach,
+          engagement_rate: newMetric.engagement_rate,
+          followers_gained: newMetric.followers_gained,
+          leads_generated: newMetric.leads_generated,
+          notes: newMetric.notes || null,
+          created_at: newMetric.created_at
+        }]);
+      } catch (e) {
+        console.warn('Supabase marketing metric error:', e);
+      }
+    }
 
     const items = this.getItem<MarketingMetric>('cr_marketing_metrics');
     items.unshift(newMetric);
@@ -803,18 +1031,19 @@ class StorageService {
 
   // --- TECH TICKETS ---
   public async getTechTickets(): Promise<TechTicket[]> {
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      const { data, error } = await supabase.from('tech_tickets').select('*').order('created_at', { ascending: false });
-      if (!error && data && data.length > 0) return data as TechTicket[];
-    }
-    return this.getItem<TechTicket>('cr_tech_tickets');
+    return this.fetchFromSupabaseOrCache<TechTicket>('tech_tickets', 'cr_tech_tickets', INITIAL_TECH_TICKETS, 'created_at', false);
   }
 
   public async addTechTicket(ticket: Omit<TechTicket, 'id' | 'created_at' | 'updated_at'>, actor: UserProfile | null): Promise<TechTicket> {
+    const validId = crypto.randomUUID();
     const newTicket: TechTicket = {
       ...ticket,
-      id: `tik-${Date.now().toString().slice(-4)}`,
+      id: validId,
+      description: ticket.description || '',
+      category: ticket.category || 'outro',
+      priority: ticket.priority || 'media',
+      status: ticket.status || 'aberto',
+      sector: ticket.sector || 'Geral',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -822,7 +1051,23 @@ class StorageService {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('tech_tickets').insert([newTicket]);
+        await supabase.from('tech_tickets').insert([{
+          id: newTicket.id,
+          title: newTicket.title,
+          description: newTicket.description,
+          category: newTicket.category,
+          priority: newTicket.priority,
+          status: newTicket.status,
+          requester_id: toValidUuidOrNull(newTicket.requester_id),
+          requester_name: newTicket.requester_name || actor?.full_name || 'Solicitante',
+          sector: newTicket.sector,
+          assigned_to: toValidUuidOrNull(newTicket.assigned_to),
+          assigned_to_name: newTicket.assigned_to_name || null,
+          attachment_url: newTicket.attachment_url || null,
+          resolution_notes: newTicket.resolution_notes || null,
+          created_at: newTicket.created_at,
+          updated_at: newTicket.updated_at
+        }]);
       } catch (e) {
         console.warn('Supabase tech ticket error:', e);
       }
@@ -854,12 +1099,12 @@ class StorageService {
       this.setItem('cr_tech_tickets', items);
 
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && isUUID(id)) {
         await supabase
           .from('tech_tickets')
           .update({
             status,
-            resolution_notes: resolutionNotes,
+            resolution_notes: resolutionNotes || null,
             updated_at: items[idx].updated_at
           })
           .eq('id', id);
@@ -882,12 +1127,7 @@ class StorageService {
 
   // --- AUDIT LOGS ---
   public async getAuditLogs(): Promise<AuditLog[]> {
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      const { data, error } = await supabase.from('audit_logs').select('*').order('created_at', { ascending: false });
-      if (!error && data && data.length > 0) return data as AuditLog[];
-    }
-    return this.getItem<AuditLog>('cr_audit_logs');
+    return this.fetchFromSupabaseOrCache<AuditLog>('audit_logs', 'cr_audit_logs', INITIAL_AUDIT_LOGS, 'created_at', false);
   }
 
   // --- NOTIFICATIONS ---
@@ -897,8 +1137,29 @@ class StorageService {
   }
 
   public async addNotification(notif: AppNotification) {
+    const validId = ensureValidUuid(notif.id);
+    const notificationToSave = { ...notif, id: validId };
+
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        await supabase.from('notifications').insert([{
+          id: validId,
+          user_id: notif.user_id || 'all',
+          title: notif.title || 'Notificação',
+          body: notif.body || '',
+          module: notif.module || 'configuracoes',
+          target_id: notif.target_id || null,
+          is_read: notif.is_read ?? false,
+          created_at: notif.created_at || new Date().toISOString()
+        }]);
+      } catch (err) {
+        console.warn('Supabase notification insert fallback:', err);
+      }
+    }
+
     const items = this.getItem<AppNotification>('cr_notifications');
-    items.unshift(notif);
+    items.unshift(notificationToSave);
     this.setItem('cr_notifications', items);
   }
 
@@ -908,6 +1169,11 @@ class StorageService {
     if (idx !== -1) {
       items[idx].is_read = true;
       this.setItem('cr_notifications', items);
+
+      const supabase = getSupabaseClient();
+      if (supabase && isUUID(id)) {
+        await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+      }
     }
   }
 }

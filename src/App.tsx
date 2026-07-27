@@ -93,7 +93,7 @@ export default function App() {
       />
 
       {/* Main Content Layout */}
-      <div className="flex-1 max-w-7xl w-full mx-auto flex">
+      <div className="flex-1 w-full flex min-h-0">
         {/* Desktop Sidebar & Mobile Bottom Navigation */}
         <Navigation
           activeTab={activeTab}
@@ -103,7 +103,7 @@ export default function App() {
         />
 
         {/* Dynamic Module Content */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 min-w-0">
+        <main className="flex-1 p-3 sm:p-5 lg:p-6 pb-24 lg:pb-6 min-w-0">
           {activeTab === 'ordens_servico' && <OrdensServico currentUser={currentUser} />}
           {activeTab === 'equipamentos' && <Equipamentos currentUser={currentUser} />}
           {activeTab === 'materiais' && <RequisicaoMateriais currentUser={currentUser} />}
