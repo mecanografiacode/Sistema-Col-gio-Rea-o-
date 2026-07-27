@@ -1,9 +1,7 @@
 // Service Worker for Colégio Reação — Gestão PWA & Push Notifications
 
-const CACHE_NAME = 'colegio-reacao-v1';
+const CACHE_NAME = 'colegio-reacao-v2';
 const ASSETS_TO_CACHE = [
-  '/',
-  '/index.html',
   '/manifest.json',
   'https://i.imgur.com/8RP9DL7.png'
 ];
@@ -25,6 +23,7 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         cacheNames.map((cache) => {
           if (cache !== CACHE_NAME) {
+            console.log('SW: Removendo cache antigo:', cache);
             return caches.delete(cache);
           }
         })
@@ -36,14 +35,23 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
+  // For navigation requests (HTML), always try network first
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(() => {
+        return caches.match(event.request);
+      })
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
         return cachedResponse;
       }
-      return fetch(event.request).catch(() => {
-        return caches.match('/');
-      });
+      return fetch(event.request);
     })
   );
 });

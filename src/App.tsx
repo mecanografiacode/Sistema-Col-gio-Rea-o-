@@ -50,8 +50,32 @@ export default function App() {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
         .register('/sw.js')
-        .then((reg) => console.log('SW PWA registrado com sucesso:', reg.scope))
+        .then((reg) => {
+          console.log('SW PWA registrado com sucesso:', reg.scope);
+          
+          // Check for updates
+          reg.onupdatefound = () => {
+            const installingWorker = reg.installing;
+            if (installingWorker) {
+              installingWorker.onstatechange = () => {
+                if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  // New update available, but we'll let the controllerchange handle the reload
+                  console.log('Novo conteúdo disponível. Atualizando...');
+                }
+              };
+            }
+          };
+        })
         .catch((err) => console.warn('Erro ao registrar SW:', err));
+
+      // Reload the page when the new service worker takes control
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!refreshing) {
+          refreshing = true;
+          window.location.reload();
+        }
+      });
     }
 
     const handleBeforeInstallPrompt = (e: Event) => {
