@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .font-serif-editorial {
+    font-family: 'Playfair Display', Georgia, serif;
+  }
+}
+
+/* Editorial Custom Utility Classes */
+.bg-editorial-red {
+  background-color: #D32F2F;
+}
+
+.text-editorial-red {
+  color: #D32F2F;
+}
+
+.border-editorial-red {
+  border-color: #D32F2F;
+}
+
+.bg-editorial-blue {
+  background-color: #1565C0;
+}
+
+.text-editorial-blue {
+  color: #1565C0;
+}
+
+.bg-editorial-canvas {
+  background-color: #F5F5F5;
+}
+

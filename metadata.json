@@ -1,0 +1,6 @@
+{
+  "name": "Sistema Colégio Reação",
+  "description": "Sistema de gestão interna do Colégio Reação: Ordens de Serviço, Equipamentos, Requisição de Materiais, Marketing, Suporte Técnico e Auditoria.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

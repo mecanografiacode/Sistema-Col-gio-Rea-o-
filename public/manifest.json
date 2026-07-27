@@ -1,0 +1,23 @@
+{
+  "short_name": "Sistema Reação",
+  "name": "Sistema Colégio Reação",
+  "description": "Sistema de Gestão Interna do Colégio Reação",
+  "icons": [
+    {
+      "src": "https://i.imgur.com/8RP9DL7.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://i.imgur.com/8RP9DL7.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#FFFFFF",
+  "theme_color": "#D32F2F",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "categories": ["education", "business", "productivity"]
+}
