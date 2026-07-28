@@ -123,6 +123,13 @@ export interface MarketingContent {
   asset_link?: string;
   has_image_authorization: boolean; // LGPD/ECA check
   notes?: string;
+  category?: string; // ex: Captação de Alunos, Vida Escolar, Pedagógico, Esportes
+  script?: string; // Roteiro do Vídeo/Reels ou Estrutura de Slides
+  caption?: string; // Legenda pronta do Instagram
+  hashtags?: string[]; // Hashtags estratégicas
+  target_audience?: string; // Público-alvo
+  hook?: string; // Gancho de 3s para retenção
+  audio_suggestion?: string; // Áudio em alta
   created_at: string;
 }
 

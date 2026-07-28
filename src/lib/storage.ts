@@ -1004,6 +1004,13 @@ class StorageService {
           asset_link: newContent.asset_link || null,
           has_image_authorization: newContent.has_image_authorization,
           notes: newContent.notes || null,
+          category: newContent.category || null,
+          script: newContent.script || null,
+          caption: newContent.caption || null,
+          hashtags: newContent.hashtags || [],
+          target_audience: newContent.target_audience || null,
+          hook: newContent.hook || null,
+          audio_suggestion: newContent.audio_suggestion || null,
           created_at: newContent.created_at
         }]);
       } catch (e) {
@@ -1024,6 +1031,62 @@ class StorageService {
       `Tipo: ${newContent.content_type}, Data: ${newContent.scheduled_date}`
     );
     return newContent;
+  }
+
+  public async updateMarketingContent(id: string, updatedFields: Partial<MarketingContent>, actor: UserProfile | null) {
+    const items = this.getItem<MarketingContent>('cr_marketing');
+    const idx = items.findIndex((i) => i.id === id);
+    if (idx !== -1) {
+      const oldItem = { ...items[idx] };
+      items[idx] = { ...items[idx], ...updatedFields };
+      this.setItem('cr_marketing', items);
+
+      const supabase = getSupabaseClient();
+      if (supabase && isUUID(id)) {
+        try {
+          await supabase.from('marketing_contents').update({
+            title: items[idx].title,
+            content_type: items[idx].content_type,
+            scheduled_date: items[idx].scheduled_date,
+            status: items[idx].status,
+            asset_link: items[idx].asset_link || null,
+            has_image_authorization: items[idx].has_image_authorization,
+            notes: items[idx].notes || null,
+            category: items[idx].category || null,
+            script: items[idx].script || null,
+            caption: items[idx].caption || null,
+            hashtags: items[idx].hashtags || [],
+            target_audience: items[idx].target_audience || null,
+            hook: items[idx].hook || null,
+            audio_suggestion: items[idx].audio_suggestion || null
+          }).eq('id', id);
+        } catch (e) {
+          console.warn('Supabase update marketing content error:', e);
+        }
+      }
+
+      await this.logAudit(actor, 'edicao', 'marketing', `Edição Post: ${items[idx].title}`, `Anterior: ${oldItem.title}`, `Novo: ${items[idx].title}`);
+    }
+  }
+
+  public async deleteMarketingContent(id: string, actor: UserProfile | null) {
+    const items = this.getItem<MarketingContent>('cr_marketing');
+    const target = items.find((i) => i.id === id);
+    if (target) {
+      const filtered = items.filter((i) => i.id !== id);
+      this.setItem('cr_marketing', filtered);
+
+      const supabase = getSupabaseClient();
+      if (supabase && isUUID(id)) {
+        try {
+          await supabase.from('marketing_contents').delete().eq('id', id);
+        } catch (e) {
+          console.warn('Supabase delete marketing error:', e);
+        }
+      }
+
+      await this.logAudit(actor, 'exclusao', 'marketing', `Post Removido: ${target.title}`, undefined, undefined);
+    }
   }
 
   public async updateMarketingStatus(id: string, status: MarketingStatus, actor: UserProfile | null) {
