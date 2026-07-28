@@ -214,7 +214,7 @@ export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) =
             <div>
               <p className="text-xs font-bold">Modo Armazenamento no Navegador (Local Storage) Ativo</p>
               <p className="text-[11px] text-amber-800/90 mt-0.5 leading-relaxed">
-                Os usuários e alterações atuais estão salvos localmente neste navegador. Para salvar permanentemente na nuvem do Supabase, configure a URL e a Anon Key no botão <strong>"Supabase SQL"</strong> no topo da página.
+                Os dados estão sendo salvos localmente neste navegador pois as variáveis de ambiente do Supabase (<code>VITE_SUPABASE_URL</code> e <code>VITE_SUPABASE_ANON_KEY</code>) ainda não foram preenchidas no painel do servidor/Vercel.
               </p>
             </div>
           </div>

@@ -4,7 +4,6 @@ import { storage } from './lib/storage';
 import { Header } from './components/Header';
 import { Navigation, NavTab } from './components/Navigation';
 import { Login } from './components/Login';
-import { SupabaseConfigModal } from './components/SupabaseConfigModal';
 import { InstallModal } from './components/InstallModal';
 
 import { OrdensServico } from './components/modules/OrdensServico';
@@ -23,7 +22,6 @@ export default function App() {
   const [unreadCount, setUnreadCount] = useState<number>(0);
 
   // Modals
-  const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
 
@@ -110,7 +108,6 @@ export default function App() {
         currentUser={currentUser}
         unreadCount={unreadCount}
         onOpenNotifications={() => setActiveTab('notificacoes')}
-        onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
         onOpenInstallModal={() => setIsInstallModalOpen(true)}
         onSwitchUser={() => setCurrentUser(null)}
         canInstallPWA={Boolean(deferredInstallPrompt) || true}
@@ -140,16 +137,6 @@ export default function App() {
           )}
         </main>
       </div>
-
-      {/* Supabase Configuration & SQL Schema Modal */}
-      <SupabaseConfigModal
-        isOpen={isSupabaseModalOpen}
-        onClose={() => setIsSupabaseModalOpen(false)}
-        onSaved={() => {
-          loadData();
-          setIsSupabaseModalOpen(false);
-        }}
-      />
 
       {/* PWA Install Modal */}
       <InstallModal

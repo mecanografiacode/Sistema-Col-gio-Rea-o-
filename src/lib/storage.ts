@@ -1391,7 +1391,66 @@ class StorageService {
 
   // --- AUDIT LOGS ---
   public async getAuditLogs(): Promise<AuditLog[]> {
-    return this.fetchFromSupabaseOrCache<AuditLog>('audit_logs', 'cr_audit_logs', INITIAL_AUDIT_LOGS, 'created_at', false);
+    const localLogs = this.getItem<AuditLog>('cr_audit_logs');
+    const supabase = getSupabaseClient();
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('audit_logs')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && data) {
+          const remoteLogs = data as AuditLog[];
+          const mergedMap = new Map<string, AuditLog>();
+
+          // Populate with remote logs
+          remoteLogs.forEach((r) => mergedMap.set(r.id, r));
+
+          // Retain local logs not yet in remote, and push them to Supabase in background
+          localLogs.forEach((l) => {
+            if (!mergedMap.has(l.id)) {
+              mergedMap.set(l.id, l);
+              supabase.from('audit_logs').upsert([{
+                id: l.id,
+                user_id: toValidUuidOrNull(l.user_id),
+                user_name: l.user_name || 'Sistema',
+                user_email: l.user_email || 'sistema@colegioreacaodf.com',
+                action: l.action,
+                module: l.module,
+                target_record: l.target_record,
+                old_value: l.old_value || null,
+                new_value: l.new_value || null,
+                ip_address: l.ip_address || null,
+                created_at: l.created_at
+              }]).then(({ error: e }) => {
+                if (e && e.message?.includes('Failed to fetch')) {
+                  markSupabaseOffline(e.message);
+                }
+              }).catch(() => {});
+            }
+          });
+
+          const mergedList = Array.from(mergedMap.values()).sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          );
+
+          this.setItem('cr_audit_logs', mergedList, false);
+          return mergedList;
+        } else if (error) {
+          if (error.message?.includes('Failed to fetch')) {
+            markSupabaseOffline(error.message);
+          }
+        }
+      } catch (err: any) {
+        if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
+          markSupabaseOffline(err?.message || 'TypeError');
+        }
+      }
+    }
+
+    return localLogs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }
 
   // --- NOTIFICATIONS ---
@@ -1587,6 +1646,26 @@ class StorageService {
           updated_at: t.updated_at || new Date().toISOString()
         };
         const { error } = await supabase.from('tech_tickets').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 7. Audit Logs
+      const auditLogs = this.getItem<AuditLog>('cr_audit_logs');
+      for (const al of auditLogs) {
+        const payload = {
+          id: ensureValidUuid(al.id),
+          user_id: toValidUuidOrNull(al.user_id),
+          user_name: al.user_name || 'Sistema',
+          user_email: al.user_email || 'sistema@colegioreacaodf.com',
+          action: al.action,
+          module: al.module,
+          target_record: al.target_record,
+          old_value: al.old_value || null,
+          new_value: al.new_value || null,
+          ip_address: al.ip_address || null,
+          created_at: al.created_at || new Date().toISOString()
+        };
+        const { error } = await supabase.from('audit_logs').upsert([payload]);
         if (!error) count++;
       }
 

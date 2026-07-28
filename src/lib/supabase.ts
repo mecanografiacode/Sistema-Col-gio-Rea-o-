@@ -1,15 +1,15 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Get credentials from VITE environment or local storage
+// Get credentials strictly from VITE environment variables (Vercel / Secrets)
 const getSupabaseCredentials = () => {
-  const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
-  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+  // Clear any legacy localStorage keys to ensure strict reliance on env vars
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('colegio_supabase_url');
+    localStorage.removeItem('colegio_supabase_key');
+  }
 
-  const storedUrl = localStorage.getItem('colegio_supabase_url') || '';
-  const storedKey = localStorage.getItem('colegio_supabase_key') || '';
-
-  const url = storedUrl || envUrl;
-  const key = storedKey || envKey;
+  const url = import.meta.env.VITE_SUPABASE_URL || '';
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
   const isValid = Boolean(
     url && 
@@ -60,20 +60,7 @@ export const getSupabaseClient = (): SupabaseClient | null => {
   return clientInstance;
 };
 
-export const saveSupabaseCredentials = (url: string, key: string) => {
-  localStorage.setItem('colegio_supabase_url', url.trim());
-  localStorage.setItem('colegio_supabase_key', key.trim());
-  clientInstance = null; // Reset instance to re-initialize
-  resetSupabaseOfflineStatus();
-};
-
-export const clearSupabaseCredentials = () => {
-  localStorage.removeItem('colegio_supabase_url');
-  localStorage.removeItem('colegio_supabase_key');
-  clientInstance = null;
-  resetSupabaseOfflineStatus();
-};
-
 export const isSupabaseConfigured = (): boolean => {
   return getSupabaseCredentials().isValid;
 };
+

@@ -1,17 +1,12 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
-import { isSupabaseConfigured } from '../lib/supabase';
 import { storage } from '../lib/storage';
 import {
   Bell,
   Download,
-  Database,
-  LogOut,
   ShieldAlert,
   UserCheck,
   User,
-  CheckCircle2,
-  AlertCircle,
   Key,
   X,
   Lock,
@@ -22,7 +17,6 @@ interface HeaderProps {
   currentUser: UserProfile;
   unreadCount: number;
   onOpenNotifications: () => void;
-  onOpenSupabaseModal: () => void;
   onOpenInstallModal: () => void;
   onSwitchUser: () => void;
   canInstallPWA: boolean;
@@ -32,7 +26,6 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   unreadCount,
   onOpenNotifications,
-  onOpenSupabaseModal,
   onOpenInstallModal,
   onSwitchUser,
   canInstallPWA
@@ -43,8 +36,6 @@ export const Header: React.FC<HeaderProps> = ({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordStatus, setPasswordStatus] = useState<{ message: string; isError: boolean } | null>(null);
   const [isSavingPassword, setIsSavingPassword] = useState(false);
-
-  const isDbConfigured = isSupabaseConfigured();
 
   const handleOpenPasswordModal = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -146,27 +137,6 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center space-x-2 sm:space-x-3">
-          {/* Supabase Connection Status Indicator */}
-          <button
-            onClick={onOpenSupabaseModal}
-            title={isDbConfigured ? 'Supabase Conectado' : 'Configurar Supabase (Modo Local Ativo)'}
-            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              isDbConfigured
-                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
-                : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
-            }`}
-          >
-            <Database className="w-3.5 h-3.5 text-current" />
-            <span className="hidden md:inline">
-              {isDbConfigured ? 'Supabase OK' : 'Supabase SQL'}
-            </span>
-            {isDbConfigured ? (
-              <CheckCircle2 className="w-3 h-3 text-emerald-600 hidden sm:inline" />
-            ) : (
-              <AlertCircle className="w-3 h-3 text-amber-600 hidden sm:inline" />
-            )}
-          </button>
-
           {/* PWA Install Button */}
           {canInstallPWA && (
             <button
@@ -236,13 +206,6 @@ export const Header: React.FC<HeaderProps> = ({
                   >
                     <User className="w-4 h-4 text-slate-500" />
                     <span>Alternar Perfil / Sair</span>
-                  </button>
-                  <button
-                    onClick={onOpenSupabaseModal}
-                    className="w-full text-left px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center space-x-2"
-                  >
-                    <Database className="w-4 h-4 text-slate-500" />
-                    <span>Configurações & Script SQL</span>
                   </button>
                 </div>
               </div>
