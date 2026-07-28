@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppNotification, UserProfile } from '../../types';
 import { storage } from '../../lib/storage';
-import { requestNotificationPermission } from '../../lib/notifications';
+import { requestNotificationPermission, sendEmailNotification } from '../../lib/notifications';
 import {
   Bell,
   CheckCircle,
@@ -9,7 +9,8 @@ import {
   ExternalLink,
   Smartphone,
   ShieldCheck,
-  CheckCheck
+  CheckCheck,
+  Mail
 } from 'lucide-react';
 
 interface NotificacoesProps {
@@ -22,6 +23,8 @@ export const Notificacoes: React.FC<NotificacoesProps> = ({ currentUser, onNavig
   const [pushStatus, setPushStatus] = useState<NotificationPermission>(
     'Notification' in window ? Notification.permission : 'denied'
   );
+  const [testEmailStatus, setTestEmailStatus] = useState<string | null>(null);
+  const [isSendingTest, setIsSendingTest] = useState(false);
 
   const loadData = async () => {
     const list = await storage.getNotifications(currentUser.id, currentUser.role);
@@ -39,6 +42,28 @@ export const Notificacoes: React.FC<NotificacoesProps> = ({ currentUser, onNavig
   const handleEnableWebPush = async () => {
     const status = await requestNotificationPermission();
     setPushStatus(status);
+  };
+
+  const handleTestEmail = async () => {
+    setIsSendingTest(true);
+    setTestEmailStatus(null);
+    try {
+      const res = await sendEmailNotification(
+        currentUser.email,
+        'Teste de Notificação por E-mail - Colégio Reação',
+        'Notificação de Teste Funcionando!',
+        `Olá ${currentUser.full_name}, este é um teste de disparo de e-mail para confirmar que as notificações do sistema estão configuradas corretamente.`
+      );
+      if (res.success) {
+        setTestEmailStatus(res.provider === 'resend' ? 'E-mail enviado com sucesso via Resend!' : 'E-mail simulado com sucesso (configure RESEND_API_KEY no .env para envios reais).');
+      } else {
+        setTestEmailStatus('Erro ao enviar e-mail: ' + (res.error || 'Erro desconhecido'));
+      }
+    } catch (err: any) {
+      setTestEmailStatus('Erro ao enviar: ' + err.message);
+    } finally {
+      setIsSendingTest(false);
+    }
   };
 
   const handleMarkAsRead = async (id: string, module: any) => {
@@ -82,6 +107,55 @@ export const Notificacoes: React.FC<NotificacoesProps> = ({ currentUser, onNavig
             {pushStatus === 'granted' ? 'Notificações Push Ativas' : 'Ativar Push no Navegador'}
           </span>
         </button>
+      </div>
+
+      {/* Email Integration Guide & Test Card */}
+      <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-2xl p-6 shadow-md space-y-4">
+        <div className="flex items-center space-x-3">
+          <div className="p-2.5 bg-red-600 rounded-xl">
+            <Mail className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold">Como ativar o envio de notificações por e-mail para os usuários?</h3>
+            <p className="text-xs text-slate-300 mt-0.5">
+              O sistema possui integração nativa com o serviço de e-mail <strong>Resend</strong> (ou provedores SMTP).
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-slate-300 pt-2 border-t border-slate-700">
+          <div className="bg-slate-800/80 p-3.5 rounded-xl border border-slate-700">
+            <span className="font-bold text-white block mb-1">Passo 1: Obter Chave</span>
+            Crie uma conta gratuita em <span className="text-red-400 font-mono">resend.com</span> e gere uma API Key de envio de e-mails.
+          </div>
+          <div className="bg-slate-800/80 p-3.5 rounded-xl border border-slate-700">
+            <span className="font-bold text-white block mb-1">Passo 2: Configurar Servidor</span>
+            Adicione a variável <span className="text-red-400 font-mono">RESEND_API_KEY=re_...</span> no arquivo <span className="font-mono">.env</span> do projeto.
+          </div>
+          <div className="bg-slate-800/80 p-3.5 rounded-xl border border-slate-700">
+            <span className="font-bold text-white block mb-1">Passo 3: Disparos Automáticos</span>
+            Sempre que houver eventos importantes (OS, Materiais, Suporte), o e-mail será entregue ao usuário.
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+          <span className="text-xs text-slate-400 truncate max-w-md">
+            Destinatário do teste: <strong className="text-white">{currentUser.email}</strong>
+          </span>
+          <button
+            onClick={handleTestEmail}
+            disabled={isSendingTest}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-colors disabled:opacity-50 shadow-sm shrink-0"
+          >
+            {isSendingTest ? 'Enviando...' : 'Testar Envio para Meu E-mail'}
+          </button>
+        </div>
+
+        {testEmailStatus && (
+          <div className="p-3 bg-slate-800 border border-slate-700 rounded-xl text-xs text-amber-300 font-medium">
+            {testEmailStatus}
+          </div>
+        )}
       </div>
 
       {/* Notifications List */}

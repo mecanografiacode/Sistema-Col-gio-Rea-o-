@@ -68,3 +68,18 @@ export const createSystemNotification = async (
 
   return newNotif;
 };
+
+export const sendEmailNotification = async (to: string, subject: string, title: string, body: string) => {
+  try {
+    const res = await fetch('/api/notifications/send-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, subject, title, body })
+    });
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    console.error('Erro ao enviar e-mail de notificação:', err);
+    return { success: false, error: err };
+  }
+};
