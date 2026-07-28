@@ -206,7 +206,8 @@ app.post('/api/notifications/send-email', async (req, res) => {
 
       const data = await emailResponse.json();
       if (!emailResponse.ok) {
-        throw new Error(data.message || 'Erro ao enviar e-mail via Resend');
+        const errorMsg = data.message || data.error || (typeof data === 'string' ? data : JSON.stringify(data));
+        throw new Error(`Resend Error (${emailResponse.status}): ${errorMsg}`);
       }
 
       return res.json({ success: true, provider: 'resend', data });
