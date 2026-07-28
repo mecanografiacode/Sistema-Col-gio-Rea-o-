@@ -56,7 +56,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (currentUser?.role === 'operador') {
+    if (currentUser?.role === 'operador' || currentUser?.role === 'admin') {
       const allowedTabs: NavTab[] = ['ordens_servico', 'materiais', 'suporte_tecnico', 'notificacoes'];
       if (!allowedTabs.includes(activeTab)) {
         setActiveTab('ordens_servico');

@@ -28,12 +28,12 @@ interface GestaoUsuariosProps {
 }
 
 export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) => {
-  if (currentUser.role === 'operador') {
+  if (currentUser.role === 'operador' || currentUser.role === 'admin') {
     return (
       <div className="bg-white rounded-2xl p-8 text-center border border-slate-200 shadow-xs my-6">
         <Users className="w-12 h-12 text-red-600 mx-auto mb-3" />
         <h3 className="text-lg font-bold text-slate-800">Acesso Restrito</h3>
-        <p className="text-xs text-slate-500 mt-1">O perfil de Operador não possui acesso à Gestão de Usuários.</p>
+        <p className="text-xs text-slate-500 mt-1">A Gestão de Usuários é restrita a Super Administradores.</p>
       </div>
     );
   }

@@ -57,7 +57,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       shortLabel: 'Patrimônio',
       description: 'Inventário com fotos, status, QR Code e controle de empréstimos.',
       icon: Monitor,
-      visible: !isOperador
+      visible: isSuperAdmin
     },
     {
       id: 'materiais' as NavTab,
@@ -73,7 +73,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       shortLabel: 'Marketing',
       description: 'Cronograma de publicações, carrosséis, stories e métricas sociais.',
       icon: Megaphone,
-      visible: !isOperador
+      visible: isSuperAdmin
     },
     {
       id: 'suporte_tecnico' as NavTab,
@@ -89,7 +89,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       shortLabel: 'Auditoria',
       description: 'Histórico completo de alterações e atividades dos usuários.',
       icon: SearchCheck,
-      visible: isAdmin
+      visible: isSuperAdmin
     },
     {
       id: 'usuarios' as NavTab,
@@ -97,7 +97,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       shortLabel: 'Equipe',
       description: 'Controle de acesso, perfis e permissões da equipe escolar.',
       icon: Users,
-      visible: !isOperador
+      visible: isSuperAdmin
     },
     {
       id: 'notificacoes' as NavTab,
