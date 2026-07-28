@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { MaterialRequest, MaterialItem, UserProfile, MaterialRequestStatus, OSPriority } from '../../types';
 import { storage } from '../../lib/storage';
 import { createSystemNotification } from '../../lib/notifications';
+import { exportMaterialRequestPDF } from '../../lib/pdfExport';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
+import { SignatureCanvas } from '../common/SignatureCanvas';
 import {
   Package,
   Plus,
@@ -14,7 +16,9 @@ import {
   Building2,
   X,
   FileText,
-  AlertCircle
+  AlertCircle,
+  Share2,
+  Check
 } from 'lucide-react';
 
 interface RequisicaoMateriaisProps {
@@ -26,8 +30,13 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<MaterialRequest | null>(null);
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('todos');
+  const [copiedExternalLink, setCopiedExternalLink] = useState(false);
 
   // New Request Form
+  const [requestedByName, setRequestedByName] = useState(currentUser.full_name);
+  const [turma, setTurma] = useState('');
+  const [requestDate, setRequestDate] = useState(new Date().toISOString().split('T')[0]);
+  const [requesterSignatureUrl, setRequesterSignatureUrl] = useState('');
   const [title, setTitle] = useState('');
   const [sector, setSector] = useState(currentUser.department || 'Coordenação');
   const [urgency, setUrgency] = useState<OSPriority>('media');
@@ -36,8 +45,11 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
     { id: '1', name: '', quantity: 1, unit: 'unidades' }
   ]);
 
-  // Review state
+  // Review & Director Approval State
   const [reviewNotes, setReviewNotes] = useState('');
+  const [directorName, setDirectorName] = useState(currentUser.full_name || 'Diretora Geral');
+  const [directorSignatureUrl, setDirectorSignatureUrl] = useState('');
+  const [directorApprovalDate, setDirectorApprovalDate] = useState(new Date().toISOString().split('T')[0]);
 
   // Delete Confirm State
   const [deleteTarget, setDeleteTarget] = useState<MaterialRequest | null>(null);
@@ -77,12 +89,20 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
     const validItems = items.filter((i) => i.name.trim() !== '');
     if (!title.trim() || validItems.length === 0) return;
 
+    if (!requesterSignatureUrl) {
+      alert('Por favor, assine digitalmente a requisição no campo de assinatura.');
+      return;
+    }
+
     const created = await storage.addMaterialRequest(
       {
         title,
         requested_by: currentUser.id,
-        requested_by_name: currentUser.full_name,
+        requested_by_name: requestedByName.trim() || currentUser.full_name,
         sector,
+        turma: turma.trim() || 'Geral / Sem Turma',
+        request_date: requestDate ? new Date(requestDate).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR'),
+        requester_signature_url: requesterSignatureUrl,
         urgency,
         justification,
         items: validItems
@@ -97,7 +117,7 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
       await createSystemNotification(
         adm.id,
         'Nova Requisição de Material Pendente',
-        `${created.requested_by_name} solicitou materiais para: ${created.sector}`,
+        `${created.requested_by_name} (${created.turma || created.sector}) solicitou materiais`,
         'materiais',
         created.id
       );
@@ -106,6 +126,8 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
     setIsNewModalOpen(false);
     setTitle('');
     setJustification('');
+    setTurma('');
+    setRequesterSignatureUrl('');
     setItems([{ id: '1', name: '', quantity: 1, unit: 'unidades' }]);
   };
 
@@ -124,10 +146,28 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
     loadData();
   };
 
+  const handleCopyExternalLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}?portal=materiais`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedExternalLink(true);
+      setTimeout(() => setCopiedExternalLink(false), 2500);
+    });
+  };
+
   const handleReviewRequest = async (status: MaterialRequestStatus) => {
     if (!selectedRequest) return;
 
-    await storage.updateMaterialRequestStatus(selectedRequest.id, status, reviewNotes, currentUser);
+    await storage.updateMaterialRequestStatus(
+      selectedRequest.id,
+      status,
+      reviewNotes,
+      currentUser,
+      {
+        director_name: directorName,
+        director_signature_url: directorSignatureUrl || selectedRequest.director_signature_url,
+        director_approval_date: directorApprovalDate ? new Date(directorApprovalDate).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR')
+      }
+    );
 
     // Notify requester
     await createSystemNotification(
@@ -140,6 +180,7 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
 
     setSelectedRequest(null);
     setReviewNotes('');
+    setDirectorSignatureUrl('');
   };
 
   const filteredRequests = requests.filter((r) => {
@@ -174,13 +215,33 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
           </p>
         </div>
 
-        <button
-          onClick={() => setIsNewModalOpen(true)}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#D32F2F] text-white font-bold text-xs uppercase tracking-wider rounded-xl hover:bg-red-800 shadow-sm transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Solicitar Materiais</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleCopyExternalLink}
+            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-slate-100 text-slate-800 font-bold text-xs rounded-xl hover:bg-slate-200 border border-slate-300 shadow-2xs transition-colors"
+            title="Copiar link público para pessoas externas solicitarem materiais sem login"
+          >
+            {copiedExternalLink ? (
+              <>
+                <Check className="w-4 h-4 text-emerald-600" />
+                <span className="text-emerald-700">Link Materiais Copiado!</span>
+              </>
+            ) : (
+              <>
+                <Share2 className="w-4 h-4 text-[#D32F2F]" />
+                <span>Link Externo (Materiais)</span>
+              </>
+            )}
+          </button>
+
+          <button
+            onClick={() => setIsNewModalOpen(true)}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#D32F2F] text-white font-bold text-xs uppercase tracking-wider rounded-xl hover:bg-red-800 shadow-sm transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Solicitar Materiais</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter Bar */}
@@ -274,26 +335,65 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
             </div>
 
             <form onSubmit={handleCreateRequest} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Título da Requisição</label>
-                <input
-                  type="text"
-                  required
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Ex: Suprimentos de papel A4 para o 3º Bimester"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Nome do Solicitante *</label>
+                  <input
+                    type="text"
+                    required
+                    value={requestedByName}
+                    onChange={(e) => setRequestedByName(e.target.value)}
+                    placeholder="Nome completo do solicitante"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Turma / Ano Letivo (ou Setor) *</label>
+                  <input
+                    type="text"
+                    required
+                    value={turma}
+                    onChange={(e) => setTurma(e.target.value)}
+                    placeholder="Ex: 3º Ano A, 6º B, Pré II ou N/A (Secretaria)"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  />
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Setor Solicitante</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Data do Pedido *</label>
+                  <input
+                    type="date"
+                    required
+                    value={requestDate}
+                    onChange={(e) => setRequestDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Setor Solicitante *</label>
                   <input
                     type="text"
                     required
                     value={sector}
                     onChange={(e) => setSector(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Título da Requisição *</label>
+                  <input
+                    type="text"
+                    required
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="Ex: Suprimentos de papel A4 e canetas"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
                   />
                 </div>
@@ -303,7 +403,7 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
                   <select
                     value={urgency}
                     onChange={(e) => setUrgency(e.target.value as OSPriority)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-600"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-600 bg-white"
                   >
                     <option value="baixa">Baixa</option>
                     <option value="media">Média</option>
@@ -380,6 +480,18 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
                 />
               </div>
 
+              {/* ASSINATURA DIGITAL DO SOLICITANTE */}
+              <div className="pt-2 border-t border-slate-100">
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-2">
+                  Assinatura Digital do Solicitante *
+                </label>
+                <SignatureCanvas
+                  label="Desenhe sua assinatura com o mouse ou tela sensível ao toque"
+                  onSaveSignature={(dataUrl) => setRequesterSignatureUrl(dataUrl)}
+                  initialSignature={requesterSignatureUrl}
+                />
+              </div>
+
               <div className="pt-3 flex justify-end space-x-2">
                 <button
                   type="button"
@@ -436,6 +548,24 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
                 </div>
               </div>
 
+              {/* DETALHES DE NOME, TURMA E DATA */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Turma / Ano</span>
+                  <span className="font-semibold text-slate-800">{selectedRequest.turma || 'Geral'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Data do Pedido</span>
+                  <span className="font-semibold text-slate-800">
+                    {selectedRequest.request_date || new Date(selectedRequest.created_at).toLocaleDateString('pt-BR')}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Setor</span>
+                  <span className="font-semibold text-slate-800">{selectedRequest.sector}</span>
+                </div>
+              </div>
+
               <div>
                 <h4 className="text-xs font-bold text-slate-700 uppercase mb-1">Itens Solicitados</h4>
                 <div className="bg-slate-50 rounded-xl border border-slate-200 divide-y divide-slate-100">
@@ -457,6 +587,49 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
                 </p>
               </div>
 
+              {/* EXIBIÇÃO DE ASSINATURAS CADASTRADAS */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">Assinatura do Solicitante</p>
+                  {selectedRequest.requester_signature_url ? (
+                    <img
+                      src={selectedRequest.requester_signature_url}
+                      alt="Assinatura Solicitante"
+                      className="h-14 object-contain bg-white rounded border border-slate-200 p-1 w-full"
+                    />
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">Sem assinatura anexada</p>
+                  )}
+                  <p className="text-[10px] text-slate-500 font-medium mt-1">{selectedRequest.requested_by_name}</p>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">Assinatura da Diretora</p>
+                  {selectedRequest.director_signature_url ? (
+                    <img
+                      src={selectedRequest.director_signature_url}
+                      alt="Assinatura Diretora"
+                      className="h-14 object-contain bg-white rounded border border-slate-200 p-1 w-full"
+                    />
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">Pendente de Visto / Assinatura da Direção</p>
+                  )}
+                  <p className="text-[10px] text-slate-500 font-medium mt-1">
+                    {selectedRequest.director_name || 'Aguardando Direção'}
+                    {selectedRequest.director_approval_date && ` (${selectedRequest.director_approval_date})`}
+                  </p>
+                </div>
+              </div>
+
+              {/* BOTÃO PARA IMPRIMIR OU BAIXAR PDF */}
+              <button
+                onClick={() => exportMaterialRequestPDF(selectedRequest)}
+                className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-sm transition-colors"
+              >
+                <FileText className="w-4 h-4 text-red-400" />
+                <span>Gerar Documento Oficial PDF com Assinaturas</span>
+              </button>
+
               {selectedRequest.review_notes && (
                 <div>
                   <h4 className="text-xs font-bold text-slate-700 uppercase mb-1">
@@ -470,35 +643,75 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
 
               {/* ADMIN APPROVAL / REJECTION / DELIVERY ACTIONS */}
               {isAdmin && (
-                <div className="p-4 bg-red-50/50 rounded-xl border border-red-100 space-y-3 pt-4">
-                  <h4 className="text-xs font-bold text-red-900 uppercase tracking-wider">
-                    Ação Administrativa
+                <div className="p-4 bg-red-50/50 rounded-xl border border-red-100 space-y-4 pt-4">
+                  <h4 className="text-xs font-bold text-red-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <Package className="w-4 h-4 text-red-600" />
+                    Visto & Aprovação da Direção / Gestão
                   </h4>
 
-                  <textarea
-                    rows={2}
-                    value={reviewNotes}
-                    onChange={(e) => setReviewNotes(e.target.value)}
-                    placeholder="Observações do parecer de aprovação ou entrega..."
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 bg-white"
-                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Nome da Diretora *</label>
+                      <input
+                        type="text"
+                        value={directorName}
+                        onChange={(e) => setDirectorName(e.target.value)}
+                        placeholder="Ex: Dra. Maria Silva / Diretora Pedagógica"
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-red-600"
+                      />
+                    </div>
 
-                  <div className="flex flex-wrap gap-2">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Data da Assinatura *</label>
+                      <input
+                        type="date"
+                        value={directorApprovalDate}
+                        onChange={(e) => setDirectorApprovalDate(e.target.value)}
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-red-600"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                      Assinatura Digital da Diretora
+                    </label>
+                    <SignatureCanvas
+                      label="Assine no campo abaixo para aprovar a requisição"
+                      onSaveSignature={(dataUrl) => setDirectorSignatureUrl(dataUrl)}
+                      initialSignature={directorSignatureUrl || selectedRequest.director_signature_url}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                      Parecer / Observações do Pedido
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={reviewNotes}
+                      onChange={(e) => setReviewNotes(e.target.value)}
+                      placeholder="Observações do parecer de aprovação ou entrega..."
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-red-600"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 pt-1">
                     <button
                       onClick={() => handleReviewRequest('aprovado')}
-                      className="flex-1 py-2 px-3 bg-emerald-600 text-white font-bold text-xs rounded-lg hover:bg-emerald-700 flex items-center justify-center gap-1"
+                      className="flex-1 py-2 px-3 bg-emerald-600 text-white font-bold text-xs rounded-lg hover:bg-emerald-700 flex items-center justify-center gap-1 shadow-sm"
                     >
-                      <CheckCircle2 className="w-4 h-4" /> Aprovar
+                      <CheckCircle2 className="w-4 h-4" /> Aprovar com Visto
                     </button>
                     <button
                       onClick={() => handleReviewRequest('entregue')}
-                      className="flex-1 py-2 px-3 bg-blue-600 text-white font-bold text-xs rounded-lg hover:bg-blue-700 flex items-center justify-center gap-1"
+                      className="flex-1 py-2 px-3 bg-blue-600 text-white font-bold text-xs rounded-lg hover:bg-blue-700 flex items-center justify-center gap-1 shadow-sm"
                     >
                       <Truck className="w-4 h-4" /> Marcar Entregue
                     </button>
                     <button
                       onClick={() => handleReviewRequest('reprovado')}
-                      className="flex-1 py-2 px-3 bg-rose-600 text-white font-bold text-xs rounded-lg hover:bg-rose-700 flex items-center justify-center gap-1"
+                      className="flex-1 py-2 px-3 bg-rose-600 text-white font-bold text-xs rounded-lg hover:bg-rose-700 flex items-center justify-center gap-1 shadow-sm"
                     >
                       <XCircle className="w-4 h-4" /> Reprovar
                     </button>

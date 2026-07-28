@@ -1,15 +1,12 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Get credentials strictly from VITE environment variables (Vercel / Secrets)
+// Get credentials from env vars or localStorage fallback
 const getSupabaseCredentials = () => {
-  // Clear any legacy localStorage keys to ensure strict reliance on env vars
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem('colegio_supabase_url');
-    localStorage.removeItem('colegio_supabase_key');
-  }
+  const customUrl = typeof window !== 'undefined' ? localStorage.getItem('colegio_supabase_url') : null;
+  const customKey = typeof window !== 'undefined' ? localStorage.getItem('colegio_supabase_key') : null;
 
-  const url = import.meta.env.VITE_SUPABASE_URL || '';
-  const key = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+  const url = customUrl || import.meta.env.VITE_SUPABASE_URL || '';
+  const key = customKey || import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
   const isValid = Boolean(
     url && 
@@ -19,6 +16,22 @@ const getSupabaseCredentials = () => {
   );
 
   return { url, key, isValid };
+};
+
+export const saveSupabaseCredentials = (url: string, key: string) => {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('colegio_supabase_url', url);
+    localStorage.setItem('colegio_supabase_key', key);
+    clientInstance = null;
+  }
+};
+
+export const clearSupabaseCredentials = () => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('colegio_supabase_url');
+    localStorage.removeItem('colegio_supabase_key');
+    clientInstance = null;
+  }
 };
 
 let clientInstance: SupabaseClient | null = null;

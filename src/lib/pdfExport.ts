@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Equipment, EquipmentLoan, ServiceOrder } from '../types';
+import { Equipment, EquipmentLoan, ServiceOrder, MaterialRequest } from '../types';
 
 const tryDrawImage = (doc: jsPDF, urlStr: string | undefined, x: number, y: number, w: number, h: number) => {
   if (!urlStr) return;
@@ -361,4 +361,159 @@ export const exportServiceOrdersPDF = (orders: ServiceOrder[]) => {
   }
 
   doc.save(`Ordens_Servico_Colegio_Reacao_${now.toISOString().split('T')[0]}.pdf`);
+};
+
+export const exportMaterialRequestPDF = (req: MaterialRequest) => {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const now = new Date();
+  const dateStr = req.request_date || new Date(req.created_at).toLocaleDateString('pt-BR');
+
+  // Header Bar
+  doc.setFillColor(211, 47, 47); // #D32F2F (Red Reação)
+  doc.rect(0, 0, 210, 24, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('COLÉGIO REAÇÃO — RECANTO DAS EMAS, DF', 14, 12);
+
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.text('REQUISIÇÃO DE MATERIAIS — COMPROVANTE DE SOLICITAÇÃO', 14, 18);
+
+  // Protocol & Status Badge
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, 28, 182, 32, 'F');
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(14, 28, 182, 32, 'S');
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text(`PROTOCOLO #${req.id}`, 20, 36);
+
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Título: ${req.title}`, 20, 42);
+
+  doc.text(`Solicitante: ${req.requested_by_name}`, 20, 48);
+  doc.text(`Turma / Setor: ${req.turma ? `${req.turma} (${req.sector})` : req.sector}`, 20, 54);
+
+  doc.text(`Data do Pedido: ${dateStr}`, 120, 42);
+  doc.text(`Urgência: ${req.urgency.toUpperCase()}`, 120, 48);
+  doc.text(`Status: ${req.status.toUpperCase()}`, 120, 54);
+
+  // Items Table
+  const tableRows = req.items.map((item, index) => [
+    (index + 1).toString(),
+    item.name,
+    item.quantity.toString(),
+    item.unit
+  ]);
+
+  autoTable(doc, {
+    startY: 64,
+    head: [['#', 'Material / Item Solicitado', 'Quantidade', 'Unidade']],
+    body: tableRows,
+    theme: 'grid',
+    headStyles: {
+      fillColor: [30, 41, 59],
+      textColor: [255, 255, 255],
+      fontSize: 9,
+      fontStyle: 'bold'
+    },
+    bodyStyles: {
+      fontSize: 9,
+      textColor: [15, 23, 42]
+    },
+    columnStyles: {
+      0: { cellWidth: 12, halign: 'center' },
+      1: { cellWidth: 110 },
+      2: { cellWidth: 30, halign: 'center', fontStyle: 'bold' },
+      3: { cellWidth: 30, halign: 'center' }
+    }
+  });
+
+  let currentY = (doc as any).lastAutoTable.finalY + 10;
+
+  // Justification Box
+  if (req.justification) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(15, 23, 42);
+    doc.text('JUSTIFICATIVA DA SOLICITAÇÃO:', 14, currentY);
+    currentY += 5;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(51, 65, 85);
+
+    const splitJustification = doc.splitTextToSize(req.justification, 180);
+    doc.text(splitJustification, 14, currentY);
+    currentY += splitJustification.length * 4.5 + 8;
+  }
+
+  // Signatures Area
+  currentY = Math.max(currentY, 180);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text('ASSINATURA E VALIDAÇÃO DOS RESPONSÁVEIS', 14, currentY);
+  currentY += 6;
+
+  // Solicitante Signature Box
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, currentY, 86, 45, 'S');
+
+  if (req.requester_signature_url) {
+    tryDrawImage(doc, req.requester_signature_url, 20, currentY + 3, 74, 25);
+  }
+  doc.line(20, currentY + 33, 94, currentY + 33);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text(req.requested_by_name || 'Solicitante', 20, currentY + 37);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Solicitante (${req.turma || req.sector}) - ${dateStr}`, 20, currentY + 41);
+
+  // Director Signature Box
+  doc.rect(110, currentY, 86, 45, 'S');
+
+  if (req.director_signature_url) {
+    tryDrawImage(doc, req.director_signature_url, 116, currentY + 3, 74, 25);
+  }
+  doc.line(116, currentY + 33, 190, currentY + 33);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text(req.director_name || 'Diretora Geral / Direção', 116, currentY + 37);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    req.director_approval_date
+      ? `Aprovado pela Direção em ${req.director_approval_date}`
+      : 'Assinatura e Visto da Diretora',
+    116,
+    currentY + 41
+  );
+
+  // Footer
+  doc.setFontSize(8);
+  doc.setTextColor(148, 163, 184);
+  doc.text(
+    `Colégio Reação — Sistema de Gestão Interna — Documento gerado em ${now.toLocaleDateString('pt-BR')}`,
+    14,
+    285
+  );
+
+  doc.save(`Requisicao_Materiais_${req.id}_Colégio_Reacao.pdf`);
 };

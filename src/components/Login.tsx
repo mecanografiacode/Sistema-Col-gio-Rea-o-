@@ -2,14 +2,15 @@ import React, { useState } from 'react';
 import { UserProfile, UserRole } from '../types';
 import { storage } from '../lib/storage';
 import { getSupabaseClient } from '../lib/supabase';
-import { ShieldAlert, UserCheck, User, ArrowRight, Lock, Mail, Building2, Loader2 } from 'lucide-react';
+import { ShieldAlert, UserCheck, User, ArrowRight, Lock, Mail, Building2, Loader2, Wrench, Package, ExternalLink } from 'lucide-react';
 
 interface LoginProps {
   profiles: UserProfile[];
   onLoginSuccess: (user: UserProfile) => void;
+  onOpenPublicPortal?: (type: 'os' | 'materiais') => void;
 }
 
-export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess }) => {
+export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess, onOpenPublicPortal }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -233,6 +234,39 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess }) => {
             <p className="text-xs text-slate-500">
               🔒 <strong className="text-slate-700">Acesso Restrito:</strong> Os usuários devem ser cadastrados previamente pelo Super Admin na aba <strong>Usuários</strong> do sistema.
             </p>
+          </div>
+        </div>
+
+        {/* PORTAL EXTERNO SEM NECESSIDADE DE LOGIN */}
+        <div className="mt-6 bg-white py-5 px-6 shadow-xl rounded-2xl border border-slate-200 text-center">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-50 text-[#D32F2F] text-[11px] font-bold uppercase tracking-wider mb-2 border border-red-200">
+            <ExternalLink className="w-3.5 h-3.5" /> Portal de Acesso Externo
+          </div>
+          <h3 className="text-sm font-bold text-slate-900">
+            Abertura de Chamados e Requisições Sem Login
+          </h3>
+          <p className="text-xs text-slate-500 mt-1 mb-4">
+            Qualquer pessoa fora do sistema (professores, alunos, pais, prestadores) pode abrir chamados de manutenção e materiais com link direto.
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              onClick={() => onOpenPublicPortal?.('os')}
+              className="flex items-center justify-center gap-2 py-3 px-3 rounded-xl border border-red-200 bg-red-50/80 text-[#D32F2F] hover:bg-red-100 text-xs font-bold transition-all shadow-2xs cursor-pointer"
+            >
+              <Wrench className="w-4 h-4 shrink-0 text-[#D32F2F]" />
+              <span>Abrir Ordem de Serviço (OS)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenPublicPortal?.('materiais')}
+              className="flex items-center justify-center gap-2 py-3 px-3 rounded-xl border border-slate-300 bg-slate-50 text-slate-800 hover:bg-slate-100 text-xs font-bold transition-all shadow-2xs cursor-pointer"
+            >
+              <Package className="w-4 h-4 shrink-0 text-slate-700" />
+              <span>Abrir Requisição de Materiais</span>
+            </button>
           </div>
         </div>
 

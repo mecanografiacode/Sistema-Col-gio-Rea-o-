@@ -25,7 +25,9 @@ import {
   Calendar,
   FileCheck,
   Trash2,
-  FileDown
+  FileDown,
+  Share2,
+  ExternalLink
 } from 'lucide-react';
 
 interface OrdensServicoProps {
@@ -40,6 +42,7 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
   const [selectedStatus, setSelectedStatus] = useState<string>('todos');
   const [selectedPriority, setSelectedPriority] = useState<string>('todas');
   const [selectedCategory, setSelectedCategory] = useState<string>('todas');
+  const [copiedExternalLink, setCopiedExternalLink] = useState(false);
 
   // Modal States
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
@@ -223,6 +226,14 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
     loadData();
   };
 
+  const handleCopyExternalLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}?portal=os`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedExternalLink(true);
+      setTimeout(() => setCopiedExternalLink(false), 2500);
+    });
+  };
+
   const filteredOrders = orders.filter((o) => {
     const matchesSearch =
       o.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -292,6 +303,24 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleCopyExternalLink}
+            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-slate-100 text-slate-800 font-bold text-xs rounded-xl hover:bg-slate-200 border border-slate-300 shadow-2xs transition-colors"
+            title="Copiar link público para pessoas externas abrirem OS sem login"
+          >
+            {copiedExternalLink ? (
+              <>
+                <Check className="w-4 h-4 text-emerald-600" />
+                <span className="text-emerald-700">Link OS Copiado!</span>
+              </>
+            ) : (
+              <>
+                <Share2 className="w-4 h-4 text-[#D32F2F]" />
+                <span>Link Externo (OS)</span>
+              </>
+            )}
+          </button>
+
           <button
             onClick={() => exportServiceOrdersPDF(filteredOrders)}
             className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-slate-800 text-white font-bold text-xs rounded-xl hover:bg-slate-900 shadow-sm transition-colors"

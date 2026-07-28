@@ -4,6 +4,7 @@ import { storage } from './lib/storage';
 import { Header } from './components/Header';
 import { Navigation, NavTab } from './components/Navigation';
 import { Login } from './components/Login';
+import { PublicPortal } from './components/PublicPortal';
 import { InstallModal } from './components/InstallModal';
 
 import { OrdensServico } from './components/modules/OrdensServico';
@@ -21,9 +22,28 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('ordens_servico');
   const [unreadCount, setUnreadCount] = useState<number>(0);
 
+  // Public External Portal State
+  const [isPublicPortalOpen, setIsPublicPortalOpen] = useState(false);
+  const [publicPortalType, setPublicPortalType] = useState<'os' | 'materiais'>('os');
+
   // Modals
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
+
+  // Check URL query params for direct external portal link access
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const portal = params.get('portal') || params.get('public');
+    const hash = window.location.hash;
+
+    if (portal === 'materiais' || hash.includes('materiais')) {
+      setPublicPortalType('materiais');
+      setIsPublicPortalOpen(true);
+    } else if (portal === 'os' || portal === 'chamados' || hash.includes('os') || hash.includes('chamados')) {
+      setPublicPortalType('os');
+      setIsPublicPortalOpen(true);
+    }
+  }, []);
 
   const loadData = async () => {
     const profs = await storage.getProfiles();
@@ -97,8 +117,29 @@ export default function App() {
     }
   };
 
+  if (isPublicPortalOpen && !currentUser) {
+    return (
+      <PublicPortal
+        initialType={publicPortalType}
+        onBackToLogin={() => setIsPublicPortalOpen(false)}
+      />
+    );
+  }
+
   if (!currentUser) {
-    return <Login profiles={profiles} onLoginSuccess={(u) => setCurrentUser(u)} />;
+    return (
+      <Login
+        profiles={profiles}
+        onLoginSuccess={(u) => {
+          setIsPublicPortalOpen(false);
+          setCurrentUser(u);
+        }}
+        onOpenPublicPortal={(type) => {
+          setPublicPortalType(type);
+          setIsPublicPortalOpen(true);
+        }}
+      />
+    );
   }
 
   return (

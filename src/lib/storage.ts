@@ -31,7 +31,7 @@ import {
   INITIAL_AUDIT_LOGS,
   INITIAL_NOTIFICATIONS
 } from './mockData';
-import { getSupabaseClient, markSupabaseOffline } from './supabase';
+import { getSupabaseClient, markSupabaseOffline, resetSupabaseOfflineStatus } from './supabase';
 
 // Helper utilities for UUID validation and FK sanitization
 const isUUID = (val: string | undefined | null): boolean => {
@@ -344,7 +344,7 @@ class StorageService {
             if (!merged.some((m) => m.id === c.id || m.email.toLowerCase() === c.email.toLowerCase())) {
               merged.push(c);
               // Background push to Supabase
-              supabase.from('profiles').upsert([{
+              const res = await supabase.from('profiles').upsert([{
                 id: c.id,
                 email: c.email.toLowerCase(),
                 full_name: c.full_name,
@@ -354,17 +354,10 @@ class StorageService {
                 is_active: c.is_active,
                 password: c.password || '123456',
                 created_at: c.created_at
-              }]).then(({ error: e }) => {
-                if (e) {
-                  if (e.message?.includes('Failed to fetch')) {
-                    markSupabaseOffline(e.message);
-                  }
-                }
-              }).catch((e) => {
-                if (e?.message?.includes('Failed to fetch')) {
-                  markSupabaseOffline(e?.message);
-                }
-              });
+              }]);
+              if (res?.error && res.error.message?.includes('Failed to fetch')) {
+                markSupabaseOffline(res.error.message);
+              }
             }
           }
 
@@ -1024,6 +1017,9 @@ class StorageService {
       id: validId,
       justification: req.justification || '',
       sector: req.sector || 'Geral',
+      turma: req.turma || undefined,
+      request_date: req.request_date || new Date().toLocaleDateString('pt-BR'),
+      requester_signature_url: req.requester_signature_url || undefined,
       urgency: req.urgency || 'media',
       status: 'pendente',
       created_at: new Date().toISOString()
@@ -1038,12 +1034,18 @@ class StorageService {
           requested_by: toValidUuidOrNull(newReq.requested_by),
           requested_by_name: newReq.requested_by_name || actor?.full_name || 'Solicitante',
           sector: newReq.sector,
+          turma: newReq.turma || null,
+          request_date: newReq.request_date || null,
+          requester_signature_url: newReq.requester_signature_url || null,
           urgency: newReq.urgency,
           justification: newReq.justification,
           items: newReq.items || [],
           status: newReq.status,
           reviewed_by: toValidUuidOrNull(newReq.reviewed_by),
           reviewed_by_name: newReq.reviewed_by_name || null,
+          director_name: newReq.director_name || null,
+          director_signature_url: newReq.director_signature_url || null,
+          director_approval_date: newReq.director_approval_date || null,
           review_notes: newReq.review_notes || null,
           created_at: newReq.created_at
         }]);
@@ -1064,7 +1066,12 @@ class StorageService {
     reqId: string,
     status: MaterialRequestStatus,
     reviewNotes: string,
-    actor: UserProfile | null
+    actor: UserProfile | null,
+    directorData?: {
+      director_name?: string;
+      director_signature_url?: string;
+      director_approval_date?: string;
+    }
   ) {
     const items = this.getItem<MaterialRequest>('cr_material_requests');
     const idx = items.findIndex((i) => i.id === reqId);
@@ -1074,6 +1081,13 @@ class StorageService {
       items[idx].reviewed_by = actor?.id;
       items[idx].reviewed_by_name = actor?.full_name;
       items[idx].review_notes = reviewNotes;
+
+      if (directorData) {
+        items[idx].director_name = directorData.director_name || actor?.full_name || 'Diretora Geral';
+        items[idx].director_signature_url = directorData.director_signature_url || items[idx].director_signature_url;
+        items[idx].director_approval_date = directorData.director_approval_date || new Date().toLocaleDateString('pt-BR');
+      }
+
       this.setItem('cr_material_requests', items);
 
       const supabase = getSupabaseClient();
@@ -1084,7 +1098,10 @@ class StorageService {
             status,
             reviewed_by: toValidUuidOrNull(actor?.id),
             reviewed_by_name: actor?.full_name || null,
-            review_notes: reviewNotes || null
+            review_notes: reviewNotes || null,
+            director_name: items[idx].director_name || null,
+            director_signature_url: items[idx].director_signature_url || null,
+            director_approval_date: items[idx].director_approval_date || null
           })
           .eq('id', reqId);
       }
@@ -1409,10 +1426,10 @@ class StorageService {
           remoteLogs.forEach((r) => mergedMap.set(r.id, r));
 
           // Retain local logs not yet in remote, and push them to Supabase in background
-          localLogs.forEach((l) => {
+          localLogs.forEach(async (l) => {
             if (!mergedMap.has(l.id)) {
               mergedMap.set(l.id, l);
-              supabase.from('audit_logs').upsert([{
+              const res = await supabase.from('audit_logs').upsert([{
                 id: l.id,
                 user_id: toValidUuidOrNull(l.user_id),
                 user_name: l.user_name || 'Sistema',
@@ -1424,11 +1441,10 @@ class StorageService {
                 new_value: l.new_value || null,
                 ip_address: l.ip_address || null,
                 created_at: l.created_at
-              }]).then(({ error: e }) => {
-                if (e && e.message?.includes('Failed to fetch')) {
-                  markSupabaseOffline(e.message);
-                }
-              }).catch(() => {});
+              }]);
+              if (res?.error && res.error.message?.includes('Failed to fetch')) {
+                markSupabaseOffline(res.error.message);
+              }
             }
           });
 
@@ -1616,8 +1632,8 @@ class StorageService {
           scheduled_date: mc.scheduled_date,
           status: mc.status,
           has_image_authorization: mc.has_image_authorization,
-          assigned_to_name: mc.assigned_to_name || null,
-          attachment_url: mc.attachment_url || null,
+          assigned_to_name: (mc as any).assigned_to_name || null,
+          attachment_url: (mc as any).attachment_url || null,
           notes: mc.notes || null,
           created_at: mc.created_at || new Date().toISOString()
         };

@@ -99,12 +99,18 @@ export interface MaterialRequest {
   requested_by: string;
   requested_by_name: string;
   sector: string;
+  turma?: string;
+  request_date?: string;
+  requester_signature_url?: string;
   urgency: OSPriority;
   justification: string;
   items: MaterialItem[];
   status: MaterialRequestStatus;
   reviewed_by?: string;
   reviewed_by_name?: string;
+  director_name?: string;
+  director_signature_url?: string;
+  director_approval_date?: string;
   review_notes?: string;
   created_at: string;
 }
