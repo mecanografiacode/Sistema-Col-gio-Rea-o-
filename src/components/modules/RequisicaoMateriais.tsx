@@ -138,12 +138,16 @@ export const RequisicaoMateriais: React.FC<RequisicaoMateriaisProps> = ({ curren
 
   const confirmDeleteRequest = async () => {
     if (!deleteTarget) return;
-    await storage.deleteMaterialRequest(deleteTarget.id, currentUser);
-    if (selectedRequest?.id === deleteTarget.id) {
-      setSelectedRequest(null);
+    try {
+      await storage.deleteMaterialRequest(deleteTarget.id, currentUser);
+      if (selectedRequest?.id === deleteTarget.id) {
+        setSelectedRequest(null);
+      }
+      setDeleteTarget(null);
+      loadData();
+    } catch (err: any) {
+      console.error('Erro retornado pelo Supabase ao deletar requisição de material:', err?.message || err);
     }
-    setDeleteTarget(null);
-    loadData();
   };
 
   const handleCopyExternalLink = () => {

@@ -169,9 +169,50 @@ class StorageService {
     const validId = crypto.randomUUID();
     const validUserId = toValidUuidOrNull(currentUser?.id);
 
+    const supabase = getSupabaseClient();
+    let finalUserId: string | null = validUserId;
+
+    if (supabase && finalUserId) {
+      try {
+        // Garante que exista um registro correspondente em public.profiles antes de gravar o log
+        const { data: profileExists, error: profileErr } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('id', finalUserId)
+          .maybeSingle();
+
+        if (profileErr) {
+          console.warn('Erro ao consultar Supabase profiles no logAudit:', profileErr.message);
+        }
+
+        if (!profileExists && currentUser) {
+          // Tenta criar o perfil no banco para que o log de auditoria possa referenciá-lo (evitando FK 23503)
+          const payload = {
+            id: finalUserId,
+            email: currentUser.email,
+            full_name: currentUser.full_name,
+            role: currentUser.role || 'operador',
+            department: currentUser.department || 'Geral',
+            is_active: currentUser.is_active ?? true,
+            created_at: currentUser.created_at || new Date().toISOString()
+          };
+          const { error: upsertErr } = await supabase.from('profiles').upsert([payload]);
+          if (upsertErr) {
+            console.warn('Erro ao auto-criar perfil no logAudit:', upsertErr.message);
+            // Se falhar o upsert do perfil, define finalUserId como null para evitar erro de FK (23503)
+            finalUserId = null;
+          }
+        }
+      } catch (err: any) {
+        console.warn('Exceção ao verificar/criar perfil para log de auditoria:', err?.message || err);
+        // Fallback preventivo
+        finalUserId = null;
+      }
+    }
+
     const newLog: AuditLog = {
       id: validId,
-      user_id: validUserId || currentUser?.id || 'sys-anon',
+      user_id: finalUserId || currentUser?.id || 'sys-anon',
       user_name: currentUser?.full_name || 'Sistema / Convidado',
       user_email: currentUser?.email || 'sistema@colegioreacaodf.com',
       action,
@@ -183,12 +224,11 @@ class StorageService {
       created_at: new Date().toISOString()
     };
 
-    const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('audit_logs').insert([{
+        const { error: insertErr } = await supabase.from('audit_logs').insert([{
           id: validId,
-          user_id: validUserId,
+          user_id: finalUserId,
           user_name: newLog.user_name,
           user_email: newLog.user_email,
           action: newLog.action,
@@ -199,7 +239,15 @@ class StorageService {
           ip_address: newLog.ip_address || null,
           created_at: newLog.created_at
         }]);
+
+        if (insertErr) {
+          console.error('Erro retornado pelo Supabase ao gravar log de auditoria (Constraint de FK ou similar):', insertErr.message, insertErr.details || '');
+          if (insertErr.message?.includes('Failed to fetch')) {
+            markSupabaseOffline(insertErr.message);
+          }
+        }
       } catch (err: any) {
+        console.error('Exceção ao gravar log de auditoria no Supabase:', err?.message || err);
         if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
           markSupabaseOffline(err?.message || 'Failed to fetch');
         }
@@ -522,20 +570,20 @@ class StorageService {
   }
 
   public async deleteProfile(userId: string, actor: UserProfile | null) {
+    const supabase = getSupabaseClient();
+    if (supabase && isUUID(userId)) {
+      const { error } = await supabase.from('profiles').delete().eq('id', userId);
+      if (error) {
+        console.error('Erro ao excluir perfil no Supabase:', error.message);
+        throw error;
+      }
+    }
+
     const profiles = this.getItem<UserProfile>('cr_profiles');
     const target = profiles.find((p) => p.id === userId);
     if (target) {
       const filtered = profiles.filter((p) => p.id !== userId);
       this.setItem('cr_profiles', filtered);
-
-      const supabase = getSupabaseClient();
-      if (supabase && isUUID(userId)) {
-        try {
-          await supabase.from('profiles').delete().eq('id', userId);
-        } catch (e) {
-          console.warn('Supabase profile delete error:', e);
-        }
-      }
 
       await this.logAudit(actor, 'exclusao', 'usuarios', `Usuário Removido: ${target.full_name} (${target.email})`, undefined, undefined);
     }
@@ -774,16 +822,20 @@ class StorageService {
   }
 
   public async deleteServiceOrder(soId: string, actor: UserProfile | null) {
+    const supabase = getSupabaseClient();
+    if (supabase && isUUID(soId)) {
+      const { error } = await supabase.from('service_orders').delete().eq('id', soId);
+      if (error) {
+        console.error('Erro ao excluir ordem de serviço no Supabase:', error.message);
+        throw error;
+      }
+    }
+
     const items = this.getItem<ServiceOrder>('cr_service_orders');
     const target = items.find((i) => i.id === soId);
     if (target) {
       const filtered = items.filter((i) => i.id !== soId);
       this.setItem('cr_service_orders', filtered);
-
-      const supabase = getSupabaseClient();
-      if (supabase && isUUID(soId)) {
-        await supabase.from('service_orders').delete().eq('id', soId);
-      }
 
       await this.logAudit(actor, 'exclusao', 'ordens_servico', `OS Excluída: ID ${soId} (${target.title})`, `Setor: ${target.sector}`, undefined);
     }
@@ -852,6 +904,19 @@ class StorageService {
   }
 
   public async deleteEquipment(eqId: string, actor: UserProfile | null) {
+    const supabase = getSupabaseClient();
+    if (supabase && isUUID(eqId)) {
+      const { error: err1 } = await supabase.from('equipments').delete().eq('id', eqId);
+      if (err1) {
+        console.error('Erro ao excluir equipamento no Supabase:', err1.message);
+        throw err1;
+      }
+      const { error: err2 } = await supabase.from('emprestimos_equipamentos').delete().eq('equipment_id', eqId);
+      if (err2) {
+        console.warn('Erro ao excluir empréstimos associados no Supabase:', err2.message);
+      }
+    }
+
     const items = this.getItem<Equipment>('cr_equipment');
     const target = items.find((i) => i.id === eqId);
     if (target) {
@@ -862,12 +927,6 @@ class StorageService {
       const loans = this.getItem<EquipmentLoan>('cr_equipment_loans');
       const filteredLoans = loans.filter((l) => l.equipment_id !== eqId);
       this.setItem('cr_equipment_loans', filteredLoans);
-
-      const supabase = getSupabaseClient();
-      if (supabase && isUUID(eqId)) {
-        await supabase.from('equipments').delete().eq('id', eqId);
-        await supabase.from('emprestimos_equipamentos').delete().eq('equipment_id', eqId);
-      }
 
       await this.logAudit(actor, 'exclusao', 'equipamentos', `Equipamento Excluído: ${target.name} (${target.asset_number})`, `Patrimônio: ${target.asset_number}`, undefined);
     }
@@ -1129,16 +1188,20 @@ class StorageService {
   }
 
   public async deleteMaterialRequest(reqId: string, actor: UserProfile | null) {
+    const supabase = getSupabaseClient();
+    if (supabase && isUUID(reqId)) {
+      const { error } = await supabase.from('material_requests').delete().eq('id', reqId);
+      if (error) {
+        console.error('Erro ao excluir requisição de material no Supabase:', error.message);
+        throw error;
+      }
+    }
+
     const items = this.getItem<MaterialRequest>('cr_material_requests');
     const target = items.find((i) => i.id === reqId);
     if (target) {
       const filtered = items.filter((i) => i.id !== reqId);
       this.setItem('cr_material_requests', filtered);
-
-      const supabase = getSupabaseClient();
-      if (supabase && isUUID(reqId)) {
-        await supabase.from('material_requests').delete().eq('id', reqId);
-      }
 
       await this.logAudit(actor, 'exclusao', 'materiais', `Requisição Excluída: ID ${reqId} (${target.title})`, `Setor: ${target.sector}`, undefined);
     }
@@ -1244,20 +1307,20 @@ class StorageService {
   }
 
   public async deleteMarketingContent(id: string, actor: UserProfile | null) {
+    const supabase = getSupabaseClient();
+    if (supabase && isUUID(id)) {
+      const { error } = await supabase.from('marketing_contents').delete().eq('id', id);
+      if (error) {
+        console.error('Erro ao excluir conteúdo de marketing no Supabase:', error.message);
+        throw error;
+      }
+    }
+
     const items = this.getItem<MarketingContent>('cr_marketing');
     const target = items.find((i) => i.id === id);
     if (target) {
       const filtered = items.filter((i) => i.id !== id);
       this.setItem('cr_marketing', filtered);
-
-      const supabase = getSupabaseClient();
-      if (supabase && isUUID(id)) {
-        try {
-          await supabase.from('marketing_contents').delete().eq('id', id);
-        } catch (e) {
-          console.warn('Supabase delete marketing error:', e);
-        }
-      }
 
       await this.logAudit(actor, 'exclusao', 'marketing', `Post Removido: ${target.title}`, undefined, undefined);
     }
@@ -1440,21 +1503,39 @@ class StorageService {
           localLogs.forEach(async (l) => {
             if (!mergedMap.has(l.id)) {
               mergedMap.set(l.id, l);
-              const res = await supabase.from('audit_logs').upsert([{
-                id: l.id,
-                user_id: toValidUuidOrNull(l.user_id),
-                user_name: l.user_name || 'Sistema',
-                user_email: l.user_email || 'sistema@colegioreacaodf.com',
-                action: l.action,
-                module: l.module,
-                target_record: l.target_record,
-                old_value: l.old_value || null,
-                new_value: l.new_value || null,
-                ip_address: l.ip_address || null,
-                created_at: l.created_at
-              }]);
-              if (res?.error && res.error.message?.includes('Failed to fetch')) {
-                markSupabaseOffline(res.error.message);
+              try {
+                let finalUserId = toValidUuidOrNull(l.user_id);
+                if (finalUserId) {
+                  const { data: profileExists } = await supabase
+                    .from('profiles')
+                    .select('id')
+                    .eq('id', finalUserId)
+                    .maybeSingle();
+                  if (!profileExists) {
+                    finalUserId = null;
+                  }
+                }
+                const res = await supabase.from('audit_logs').upsert([{
+                  id: l.id,
+                  user_id: finalUserId,
+                  user_name: l.user_name || 'Sistema',
+                  user_email: l.user_email || 'sistema@colegioreacaodf.com',
+                  action: l.action,
+                  module: l.module,
+                  target_record: l.target_record,
+                  old_value: l.old_value || null,
+                  new_value: l.new_value || null,
+                  ip_address: l.ip_address || null,
+                  created_at: l.created_at
+                }]);
+                if (res?.error) {
+                  console.warn('Erro ao sincronizar log de auditoria em background:', res.error.message);
+                  if (res.error.message?.includes('Failed to fetch')) {
+                    markSupabaseOffline(res.error.message);
+                  }
+                }
+              } catch (err: any) {
+                console.warn('Exceção ao sincronizar log de auditoria em background:', err?.message || err);
               }
             }
           });
@@ -1561,12 +1642,16 @@ class StorageService {
   }
 
   public async deleteTeacher(id: string): Promise<void> {
-    const items = this.getItem<any>('cr_teachers').filter(t => t.id !== id);
-    this.setItem('cr_teachers', items);
     const supabase = getSupabaseClient();
     if (supabase && isUUID(id)) {
-      await supabase.from('teachers').delete().eq('id', id);
+      const { error } = await supabase.from('teachers').delete().eq('id', id);
+      if (error) {
+        console.error('Erro ao deletar professor no Supabase:', error.message);
+        throw error;
+      }
     }
+    const items = this.getItem<any>('cr_teachers').filter(t => t.id !== id);
+    this.setItem('cr_teachers', items);
   }
 
   // --- CLASSES (TURMAS) ---
@@ -1596,12 +1681,16 @@ class StorageService {
   }
 
   public async deleteClass(id: string): Promise<void> {
-    const items = this.getItem<any>('cr_classes').filter(c => c.id !== id);
-    this.setItem('cr_classes', items);
     const supabase = getSupabaseClient();
     if (supabase && isUUID(id)) {
-      await supabase.from('classes').delete().eq('id', id);
+      const { error } = await supabase.from('classes').delete().eq('id', id);
+      if (error) {
+        console.error('Erro ao deletar turma no Supabase:', error.message);
+        throw error;
+      }
     }
+    const items = this.getItem<any>('cr_classes').filter(c => c.id !== id);
+    this.setItem('cr_classes', items);
   }
 
   // --- SCHEDULE SLOTS ---
@@ -1827,21 +1916,39 @@ class StorageService {
       // 7. Audit Logs
       const auditLogs = this.getItem<AuditLog>('cr_audit_logs');
       for (const al of auditLogs) {
-        const payload = {
-          id: ensureValidUuid(al.id),
-          user_id: toValidUuidOrNull(al.user_id),
-          user_name: al.user_name || 'Sistema',
-          user_email: al.user_email || 'sistema@colegioreacaodf.com',
-          action: al.action,
-          module: al.module,
-          target_record: al.target_record,
-          old_value: al.old_value || null,
-          new_value: al.new_value || null,
-          ip_address: al.ip_address || null,
-          created_at: al.created_at || new Date().toISOString()
-        };
-        const { error } = await supabase.from('audit_logs').upsert([payload]);
-        if (!error) count++;
+        try {
+          let finalUserId = toValidUuidOrNull(al.user_id);
+          if (finalUserId) {
+            const { data: profileExists } = await supabase
+              .from('profiles')
+              .select('id')
+              .eq('id', finalUserId)
+              .maybeSingle();
+            if (!profileExists) {
+              finalUserId = null;
+            }
+          }
+          const payload = {
+            id: ensureValidUuid(al.id),
+            user_id: finalUserId,
+            user_name: al.user_name || 'Sistema',
+            user_email: al.user_email || 'sistema@colegioreacaodf.com',
+            action: al.action,
+            module: al.module,
+            target_record: al.target_record,
+            old_value: al.old_value || null,
+            new_value: al.new_value || null,
+            ip_address: al.ip_address || null,
+            created_at: al.created_at || new Date().toISOString()
+          };
+          const { error } = await supabase.from('audit_logs').upsert([payload]);
+          if (!error) count++;
+          else {
+            console.warn('Erro ao sincronizar log de auditoria no syncLocalDataToSupabase:', error.message);
+          }
+        } catch (err: any) {
+          console.warn('Exceção ao sincronizar log de auditoria no syncLocalDataToSupabase:', err?.message || err);
+        }
       }
 
       // 8. Teachers

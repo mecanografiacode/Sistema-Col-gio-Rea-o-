@@ -218,12 +218,16 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
 
   const confirmDeleteOrder = async () => {
     if (!deleteTarget) return;
-    await storage.deleteServiceOrder(deleteTarget.id, currentUser);
-    if (selectedOrder?.id === deleteTarget.id) {
-      setSelectedOrder(null);
+    try {
+      await storage.deleteServiceOrder(deleteTarget.id, currentUser);
+      if (selectedOrder?.id === deleteTarget.id) {
+        setSelectedOrder(null);
+      }
+      setDeleteTarget(null);
+      loadData();
+    } catch (err: any) {
+      console.error('Erro retornado pelo Supabase ao deletar ordem de serviço:', err?.message || err);
     }
-    setDeleteTarget(null);
-    loadData();
   };
 
   const handleCopyExternalLink = () => {

@@ -188,8 +188,13 @@ function TeacherManager({ teachers, setTeachers }: { teachers: Teacher[], setTea
     setNewTeacherGroups([]);
   };
 
-  const removeTeacher = (id: string) => {
-    setTeachers(teachers.filter(t => t.id !== id));
+  const removeTeacher = async (id: string) => {
+    try {
+      await storage.deleteTeacher(id);
+      setTeachers(teachers.filter(t => t.id !== id));
+    } catch (err: any) {
+      console.error('Erro retornado pelo Supabase ao deletar professor:', err?.message || err);
+    }
   };
 
   return (
@@ -377,10 +382,15 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
     setNewClassName('');
   };
 
-  const removeClass = (id: string) => {
-    setClasses(classes.filter(c => c.id !== id));
-    if (editingClassId === id) {
-      setEditingClassId(null);
+  const removeClass = async (id: string) => {
+    try {
+      await storage.deleteClass(id);
+      setClasses(classes.filter(c => c.id !== id));
+      if (editingClassId === id) {
+        setEditingClassId(null);
+      }
+    } catch (err: any) {
+      console.error('Erro retornado pelo Supabase ao deletar turma:', err?.message || err);
     }
   };
 

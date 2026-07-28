@@ -143,9 +143,13 @@ export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) =
   };
 
   const handleDeleteUser = async (userId: string) => {
-    await storage.deleteProfile(userId, currentUser);
-    await loadData();
-    setDeletingUserId(null);
+    try {
+      await storage.deleteProfile(userId, currentUser);
+      await loadData();
+      setDeletingUserId(null);
+    } catch (err: any) {
+      console.error('Erro retornado pelo Supabase ao deletar usuário:', err?.message || err);
+    }
   };
 
   const handleToggleActive = async (userId: string) => {

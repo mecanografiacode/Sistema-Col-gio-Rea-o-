@@ -242,12 +242,16 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
 
   const confirmDeleteEquipment = async () => {
     if (!deleteTarget) return;
-    await storage.deleteEquipment(deleteTarget.id, currentUser);
-    if (selectedEquipment?.id === deleteTarget.id) {
-      setSelectedEquipment(null);
+    try {
+      await storage.deleteEquipment(deleteTarget.id, currentUser);
+      if (selectedEquipment?.id === deleteTarget.id) {
+        setSelectedEquipment(null);
+      }
+      setDeleteTarget(null);
+      loadData();
+    } catch (err: any) {
+      console.error('Erro retornado pelo Supabase ao deletar equipamento:', err?.message || err);
     }
-    setDeleteTarget(null);
-    loadData();
   };
 
   return (

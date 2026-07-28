@@ -236,9 +236,13 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
   };
 
   const handleDeletePost = async (id: string) => {
-    await storage.deleteMarketingContent(id, currentUser);
-    setSelectedContent(null);
-    setEditingContent(null);
+    try {
+      await storage.deleteMarketingContent(id, currentUser);
+      setSelectedContent(null);
+      setEditingContent(null);
+    } catch (err: any) {
+      console.error('Erro retornado pelo Supabase ao deletar conteúdo de marketing:', err?.message || err);
+    }
   };
 
   const handleStatusChange = async (contentId: string, newStatus: MarketingStatus) => {
