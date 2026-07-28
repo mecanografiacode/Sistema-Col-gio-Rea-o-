@@ -212,3 +212,45 @@ export interface SupabaseConfig {
   anonKey: string;
   isConfigured: boolean;
 }
+
+export type EducationalGroup = 'infantil' | 'anos_iniciais' | 'anos_finais' | 'ensino_medio';
+export type DayOfWeek = 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado';
+
+export type Shift = 'matutino' | 'vespertino' | 'ambos';
+
+export interface Teacher {
+  id: string;
+  name: string;
+  subjects: string[];
+  groups: EducationalGroup[];
+  workload_hours?: number;
+  available_days: DayOfWeek[];
+  availability_shift: Shift;
+  created_at: string;
+}
+
+export interface SchoolClass {
+  id: string;
+  name: string;
+  group: EducationalGroup;
+  subject_workloads?: { [subject: string]: number };
+  created_at: string;
+}
+
+export interface ScheduleSlot {
+  id: string;
+  class_id: string;
+  teacher_id: string;
+  subject: string;
+  day_of_week: DayOfWeek;
+  start_time: string;
+  end_time: string;
+}
+
+export interface TimeBlock {
+  id: string;
+  class_id: string;
+  start_time: string;
+  end_time: string;
+  is_interval?: boolean;
+}

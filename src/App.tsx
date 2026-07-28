@@ -15,6 +15,7 @@ import { SuporteTecnico } from './components/modules/SuporteTecnico';
 import { Auditoria } from './components/modules/Auditoria';
 import { GestaoUsuarios } from './components/modules/GestaoUsuarios';
 import { Notificacoes } from './components/modules/Notificacoes';
+import { EditorHorarios } from './components/modules/EditorHorarios';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -182,6 +183,7 @@ export default function App() {
           {activeTab === 'suporte_tecnico' && <SuporteTecnico currentUser={currentUser} />}
           {activeTab === 'auditoria' && <Auditoria currentUser={currentUser} />}
           {activeTab === 'usuarios' && <GestaoUsuarios currentUser={currentUser} />}
+          {activeTab === 'editor_horarios' && <EditorHorarios currentUser={currentUser} />}
           {activeTab === 'notificacoes' && (
             <Notificacoes currentUser={currentUser} onNavigateTab={(tab) => setActiveTab(tab)} />
           )}
