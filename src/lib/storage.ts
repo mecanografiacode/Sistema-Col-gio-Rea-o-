@@ -166,97 +166,88 @@ class StorageService {
     oldValue?: string,
     newValue?: string
   ) {
-    const validId = crypto.randomUUID();
-    const validUserId = toValidUuidOrNull(currentUser?.id);
+    try {
+      const validId = crypto.randomUUID();
+      const validUserId = toValidUuidOrNull(currentUser?.id);
 
-    const supabase = getSupabaseClient();
-    let finalUserId: string | null = validUserId;
+      const supabase = getSupabaseClient();
+      let finalUserId: string | null = null;
 
-    if (supabase && finalUserId) {
-      try {
-        // Garante que exista um registro correspondente em public.profiles antes de gravar o log
-        const { data: profileExists, error: profileErr } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('id', finalUserId)
-          .maybeSingle();
+      if (supabase && validUserId) {
+        try {
+          // Garante que exista um registro correspondente em public.profiles antes de gravar o log
+          const { data: profileExists, error: profileErr } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('id', validUserId)
+            .maybeSingle();
 
-        if (profileErr) {
-          console.warn('Erro ao consultar Supabase profiles no logAudit:', profileErr.message);
-        }
+          if (profileErr) {
+            console.warn('Erro ao consultar Supabase profiles no logAudit:', profileErr.message);
+          }
 
-        if (!profileExists && currentUser) {
-          // Tenta criar o perfil no banco para que o log de auditoria possa referenciá-lo (evitando FK 23503)
-          const payload = {
-            id: finalUserId,
-            email: currentUser.email,
-            full_name: currentUser.full_name,
-            role: currentUser.role || 'operador',
-            department: currentUser.department || 'Geral',
-            is_active: currentUser.is_active ?? true,
-            created_at: currentUser.created_at || new Date().toISOString()
-          };
-          const { error: upsertErr } = await supabase.from('profiles').upsert([payload]);
-          if (upsertErr) {
-            console.warn('Erro ao auto-criar perfil no logAudit:', upsertErr.message);
-            // Se falhar o upsert do perfil, define finalUserId como null para evitar erro de FK (23503)
+          if (profileExists) {
+            finalUserId = validUserId;
+          } else {
+            console.warn(`Aviso no logAudit: perfil ${validUserId} não localizado no banco. Gravando log com user_id = null.`);
             finalUserId = null;
           }
+        } catch (err: any) {
+          console.warn('Exceção ao verificar perfil no logAudit:', err?.message || err);
+          finalUserId = null;
         }
-      } catch (err: any) {
-        console.warn('Exceção ao verificar/criar perfil para log de auditoria:', err?.message || err);
-        // Fallback preventivo
-        finalUserId = null;
       }
-    }
 
-    const newLog: AuditLog = {
-      id: validId,
-      user_id: finalUserId || currentUser?.id || 'sys-anon',
-      user_name: currentUser?.full_name || 'Sistema / Convidado',
-      user_email: currentUser?.email || 'sistema@colegioreacaodf.com',
-      action,
-      module,
-      target_record: targetRecord,
-      old_value: oldValue || undefined,
-      new_value: newValue || undefined,
-      ip_address: '187.52.190.' + Math.floor(Math.random() * 200 + 10),
-      created_at: new Date().toISOString()
-    };
+      const newLog: AuditLog = {
+        id: validId,
+        user_id: finalUserId,
+        user_name: currentUser?.full_name || 'Sistema / Convidado',
+        user_email: currentUser?.email || 'sistema@colegioreacaodf.com',
+        action,
+        module,
+        target_record: targetRecord,
+        old_value: oldValue || undefined,
+        new_value: newValue || undefined,
+        ip_address: '187.52.190.' + Math.floor(Math.random() * 200 + 10),
+        created_at: new Date().toISOString()
+      };
 
-    if (supabase) {
-      try {
-        const { error: insertErr } = await supabase.from('audit_logs').insert([{
-          id: validId,
-          user_id: finalUserId,
-          user_name: newLog.user_name,
-          user_email: newLog.user_email,
-          action: newLog.action,
-          module: newLog.module,
-          target_record: newLog.target_record,
-          old_value: newLog.old_value || null,
-          new_value: newLog.new_value || null,
-          ip_address: newLog.ip_address || null,
-          created_at: newLog.created_at
-        }]);
+      if (supabase) {
+        try {
+          const { error: insertErr } = await supabase.from('audit_logs').insert([{
+            id: validId,
+            user_id: finalUserId,
+            user_name: newLog.user_name,
+            user_email: newLog.user_email,
+            action: newLog.action,
+            module: newLog.module,
+            target_record: newLog.target_record,
+            old_value: newLog.old_value || null,
+            new_value: newLog.new_value || null,
+            ip_address: newLog.ip_address || null,
+            created_at: newLog.created_at
+          }]);
 
-        if (insertErr) {
-          console.error('Erro retornado pelo Supabase ao gravar log de auditoria (Constraint de FK ou similar):', insertErr.message, insertErr.details || '');
-          if (insertErr.message?.includes('Failed to fetch')) {
-            markSupabaseOffline(insertErr.message);
+          if (insertErr) {
+            console.error('Erro retornado pelo Supabase ao gravar log de auditoria (Constraint de FK ou similar):', insertErr.message, insertErr.details || '');
+            if (insertErr.message?.includes('Failed to fetch')) {
+              markSupabaseOffline(insertErr.message);
+            }
+          }
+        } catch (err: any) {
+          console.error('Exceção ao gravar log de auditoria no Supabase:', err?.message || err);
+          if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
+            markSupabaseOffline(err?.message || 'Failed to fetch');
           }
         }
-      } catch (err: any) {
-        console.error('Exceção ao gravar log de auditoria no Supabase:', err?.message || err);
-        if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
-          markSupabaseOffline(err?.message || 'Failed to fetch');
-        }
       }
-    }
 
-    const logs = this.getItem<AuditLog>('cr_audit_logs');
-    logs.unshift(newLog);
-    this.setItem('cr_audit_logs', logs);
+      const logs = this.getItem<AuditLog>('cr_audit_logs');
+      logs.unshift(newLog);
+      this.setItem('cr_audit_logs', logs);
+    } catch (outerErr: any) {
+      console.error('Falha geral silenciosa em logAudit para evitar cancelamento da ação principal:', outerErr?.message || outerErr);
+    }
   }
 
   // --- LOCAL STORAGE HELPERS ---

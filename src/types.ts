@@ -184,7 +184,7 @@ export type AuditModule = 'ordens_servico' | 'equipamentos' | 'materiais' | 'mar
 
 export interface AuditLog {
   id: string;
-  user_id: string;
+  user_id: string | null;
   user_name: string;
   user_email: string;
   action: AuditAction;
