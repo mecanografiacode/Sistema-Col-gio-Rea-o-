@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { UserProfile } from '../types';
-import { ShieldAlert, UserCheck, User, ArrowRight, Lock, Mail, Building2 } from 'lucide-react';
+import { UserProfile, UserRole } from '../types';
+import { storage } from '../lib/storage';
+import { getSupabaseClient } from '../lib/supabase';
+import { ShieldAlert, UserCheck, User, ArrowRight, Lock, Mail, Building2, Loader2 } from 'lucide-react';
 
 interface LoginProps {
   profiles: UserProfile[];
@@ -11,50 +13,135 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleManualLogin = (e: React.FormEvent) => {
+  const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    setIsLoading(true);
 
-    if (!email.trim()) {
-      setErrorMessage('Por favor, digite seu e-mail corporativo.');
-      return;
-    }
-
-    const emailTrimmed = email.trim().toLowerCase();
-    const found = profiles.find((p) => p.email.toLowerCase() === emailTrimmed);
-
-    if (found) {
-      if (!found.is_active) {
-        setErrorMessage('Sua conta está desativada. Fale com o Super Admin.');
+    try {
+      if (!email.trim()) {
+        setErrorMessage('Por favor, digite seu e-mail corporativo.');
+        setIsLoading(false);
         return;
       }
 
-      // Check password if set or fallback to default
-      const storedPassword = found.password || '123456';
-      if (password !== storedPassword) {
-        setErrorMessage('Senha incorreta. Verifique suas credenciais ou solicite redefinição.');
-        return;
+      const emailTrimmed = email.trim().toLowerCase();
+      let targetUser = profiles.find((p) => p.email.toLowerCase() === emailTrimmed);
+
+      // If not found in local profiles state, try querying Supabase directly
+      const supabase = getSupabaseClient();
+      if (!targetUser && supabase) {
+        try {
+          const { data: dbProfiles } = await supabase
+            .from('profiles')
+            .select('*')
+            .ilike('email', emailTrimmed);
+
+          if (dbProfiles && dbProfiles.length > 0) {
+            const raw = dbProfiles[0];
+            targetUser = {
+              id: raw.id || crypto.randomUUID(),
+              email: raw.email.toLowerCase(),
+              full_name: raw.full_name || 'Usuário Sem Nome',
+              role: (raw.role as UserRole) || 'operador',
+              department: raw.department || 'Geral',
+              avatar_url: raw.avatar_url,
+              is_active: raw.is_active ?? true,
+              created_at: raw.created_at || new Date().toISOString(),
+              password: raw.password || '123456'
+            };
+            // Sync into local profiles
+            await storage.addProfile(targetUser, null);
+          } else {
+            // Check Supabase Auth as fallback
+            try {
+              const { data: authData } = await supabase.auth.signInWithPassword({
+                email: emailTrimmed,
+                password: password || '123456'
+              });
+              if (authData?.user) {
+                const u = authData.user;
+                targetUser = {
+                  id: u.id,
+                  email: (u.email || emailTrimmed).toLowerCase(),
+                  full_name: u.user_metadata?.full_name || emailTrimmed.split('@')[0].toUpperCase(),
+                  role: (u.user_metadata?.role as UserRole) || 'operador',
+                  department: u.user_metadata?.department || 'Geral',
+                  is_active: true,
+                  created_at: u.created_at || new Date().toISOString(),
+                  password: password || '123456'
+                };
+                await storage.addProfile(targetUser, null);
+              }
+            } catch (authErr) {
+              // Ignore auth sign in error if not matching
+            }
+          }
+        } catch (e) {
+          console.warn('Erro ao consultar Supabase profiles no login:', e);
+        }
       }
 
-      onLoginSuccess(found);
-    } else {
-      // First boot fallback: if database has zero users, register as initial Super Admin
-      if (profiles.length === 0) {
-        const newProfile: UserProfile = {
-          id: `user-${Date.now()}`,
-          email: email.trim(),
-          full_name: email.split('@')[0].replace(/[._]/g, ' ').toUpperCase(),
-          role: 'super_admin',
-          department: 'Direção Geral',
-          is_active: true,
-          password: password || '123456',
-          created_at: new Date().toISOString()
-        };
-        onLoginSuccess(newProfile);
+      if (targetUser) {
+        if (!targetUser.is_active) {
+          setErrorMessage('Sua conta está desativada. Fale com o Super Admin.');
+          setIsLoading(false);
+          return;
+        }
+
+        const storedPassword = targetUser.password || '123456';
+        if (password !== storedPassword) {
+          setErrorMessage('Senha incorreta. Verifique suas credenciais ou solicite redefinição.');
+          setIsLoading(false);
+          return;
+        }
+
+        // Write login entry to audit logs
+        await storage.logAudit(
+          targetUser,
+          'login',
+          'usuarios',
+          `Acesso ao Sistema: ${targetUser.full_name} (${targetUser.email})`,
+          undefined,
+          `Role: ${targetUser.role}`
+        );
+
+        onLoginSuccess(targetUser);
       } else {
-        setErrorMessage('E-mail não cadastrado no sistema. Solicite o cadastro ao Super Admin na aba Usuários.');
+        // Fallback: if database has zero users, create initial Super Admin
+        const allProfiles = await storage.getProfiles();
+        if (allProfiles.length === 0) {
+          const newProfile: UserProfile = {
+            id: crypto.randomUUID(),
+            email: email.trim().toLowerCase(),
+            full_name: email.split('@')[0].replace(/[._]/g, ' ').toUpperCase(),
+            role: 'super_admin',
+            department: 'Direção Geral',
+            is_active: true,
+            password: password || '123456',
+            created_at: new Date().toISOString()
+          };
+          await storage.addProfile(newProfile, null);
+          await storage.logAudit(
+            newProfile,
+            'login',
+            'usuarios',
+            `Primeiro Acesso — Super Admin Criado: ${newProfile.full_name}`,
+            undefined,
+            `Role: super_admin`
+          );
+          onLoginSuccess(newProfile);
+        } else {
+          setErrorMessage('E-mail não cadastrado no sistema. Solicite o cadastro ao Super Admin na aba Usuários.');
+        }
       }
+    } catch (err) {
+      console.error('Erro no fluxo de login:', err);
+      setErrorMessage('Ocorreu um erro ao processar o login. Tente novamente.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -125,10 +212,20 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess }) => {
 
             <button
               type="submit"
-              className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-lg shadow-sm text-xs uppercase tracking-wider font-bold text-white bg-[#D32F2F] hover:bg-red-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
+              disabled={isLoading}
+              className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-lg shadow-sm text-xs uppercase tracking-wider font-bold text-white bg-[#D32F2F] hover:bg-red-800 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
             >
-              <span>Entrar no Sistema</span>
-              <ArrowRight className="w-4 h-4" />
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Autenticando...</span>
+                </>
+              ) : (
+                <>
+                  <span>Entrar no Sistema</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
           </form>
 

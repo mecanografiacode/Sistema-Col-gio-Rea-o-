@@ -96,7 +96,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       shortLabel: 'Equipe',
       description: 'Controle de acesso, perfis e permissões da equipe escolar.',
       icon: Users,
-      visible: isAdmin
+      visible: true
     },
     {
       id: 'notificacoes' as NavTab,

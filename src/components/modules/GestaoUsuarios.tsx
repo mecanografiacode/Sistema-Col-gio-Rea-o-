@@ -26,6 +26,7 @@ interface GestaoUsuariosProps {
 
 export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) => {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
   const [isNewUserModalOpen, setIsNewUserModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
@@ -54,6 +55,16 @@ export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) =
     });
     return () => unsubscribe();
   }, []);
+
+  const filteredProfiles = profiles.filter((p) => {
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.toLowerCase();
+    return (
+      p.full_name.toLowerCase().includes(term) ||
+      p.email.toLowerCase().includes(term) ||
+      (p.department && p.department.toLowerCase().includes(term))
+    );
+  });
 
   const handleOpenNewModal = () => {
     setFullName('');
@@ -91,6 +102,7 @@ export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) =
       currentUser
     );
 
+    await loadData();
     setIsNewUserModalOpen(false);
     setFullName('');
     setEmail('');
@@ -113,16 +125,19 @@ export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) =
       currentUser
     );
 
+    await loadData();
     setEditingUser(null);
   };
 
   const handleDeleteUser = async (userId: string) => {
     await storage.deleteProfile(userId, currentUser);
+    await loadData();
     setDeletingUserId(null);
   };
 
   const handleToggleActive = async (userId: string) => {
     await storage.toggleProfileActive(userId, currentUser);
+    await loadData();
   };
 
   const toggleShowPassword = (id: string) => {
@@ -132,131 +147,179 @@ export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) =
   const getRoleBadge = (r: UserRole) => {
     switch (r) {
       case 'super_admin':
-        return <span className="bg-red-100 text-red-800 border border-red-200 text-xs font-bold px-2.5 py-0.5 rounded-full">Super Admin</span>;
+        return (
+          <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 border border-red-200 text-xs font-bold px-2.5 py-0.5 rounded-full whitespace-nowrap shrink-0">
+            <ShieldAlert className="w-3.5 h-3.5 text-red-600 shrink-0" />
+            <span>Super Admin</span>
+          </span>
+        );
       case 'admin':
-        return <span className="bg-blue-100 text-blue-800 border border-blue-200 text-xs font-bold px-2.5 py-0.5 rounded-full">Admin</span>;
+        return (
+          <span className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 border border-blue-200 text-xs font-bold px-2.5 py-0.5 rounded-full whitespace-nowrap shrink-0">
+            <UserCheck className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <span>Admin</span>
+          </span>
+        );
       default:
-        return <span className="bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold px-2.5 py-0.5 rounded-full">Operador</span>;
+        return (
+          <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold px-2.5 py-0.5 rounded-full whitespace-nowrap shrink-0">
+            <User className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+            <span>Operador</span>
+          </span>
+        );
     }
   };
 
   return (
     <div className="space-y-6 pb-20 lg:pb-8">
       {/* Title Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <Users className="w-6 h-6 text-[#D32F2F]" />
             <h2 className="text-2xl font-serif-editorial font-bold text-gray-900">Gestão de Equipe & Perfis</h2>
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Cadastro, edição e controle de permissões dos usuários do Colégio Reação
+            Cadastro, edição de senha e controle de equipe do Colégio Reação ({profiles.length} usuários)
           </p>
         </div>
 
-        {isAdmin && (
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Buscar por nome, e-mail..."
+            className="px-3.5 py-2 border border-slate-300 rounded-xl text-xs text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-red-600 shadow-xs"
+          />
+
           <button
             onClick={handleOpenNewModal}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#D32F2F] text-white font-bold text-xs uppercase tracking-wider rounded-xl hover:bg-red-800 shadow-sm transition-colors"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#D32F2F] text-white font-bold text-xs uppercase tracking-wider rounded-xl hover:bg-red-800 shadow-sm transition-colors shrink-0"
           >
             <UserPlus className="w-4 h-4" />
             <span>Cadastrar Colaborador</span>
           </button>
-        )}
+        </div>
       </div>
 
       {/* Users Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {profiles.map((p) => (
-          <div
-            key={p.id}
-            className={`bg-white rounded-2xl border p-5 shadow-xs flex flex-col justify-between space-y-4 ${
-              !p.is_active ? 'opacity-70 bg-slate-50 border-slate-300' : 'border-slate-200'
-            }`}
-          >
-            <div>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className="w-11 h-11 rounded-xl bg-slate-900 text-white font-bold text-sm flex items-center justify-center shrink-0 uppercase shadow-xs">
-                    {p.full_name.charAt(0) || 'U'}
+      {filteredProfiles.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-500">
+          <Users className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+          <p className="text-sm font-semibold">Nenhum colaborador encontrado.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredProfiles.map((p) => {
+            const isMe = p.id === currentUser.id || p.email.toLowerCase() === currentUser.email.toLowerCase();
+            const canEditThisUser = isAdmin || isMe;
+
+            return (
+              <div
+                key={p.id}
+                className={`bg-white rounded-2xl border p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-4 overflow-hidden min-w-0 ${
+                  isMe ? 'border-red-300 ring-2 ring-red-100 bg-red-50/20' : !p.is_active ? 'opacity-70 bg-slate-50 border-slate-300' : 'border-slate-200'
+                }`}
+              >
+                <div className="space-y-3 min-w-0">
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 min-w-0">
+                    <div className="flex items-start space-x-3 min-w-0 flex-1">
+                      <div className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl font-bold text-sm flex items-center justify-center shrink-0 uppercase shadow-xs ${
+                        isMe ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'
+                      }`}>
+                        {p.full_name.charAt(0) || 'U'}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h3 className="text-sm font-bold text-slate-900 leading-snug break-words">{p.full_name}</h3>
+                          {isMe && (
+                            <span className="bg-red-100 text-red-800 text-[10px] font-extrabold px-2 py-0.5 rounded-md border border-red-200 shrink-0">
+                              Você
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 truncate break-all mt-0.5" title={p.email}>
+                          {p.email}
+                        </p>
+                        <span className="text-[11px] text-slate-400 mt-0.5 block truncate">{p.department || 'Geral'}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center sm:flex-col sm:items-end justify-between sm:justify-start gap-1.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+                      {getRoleBadge(p.role)}
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
+                          p.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                        }`}
+                      >
+                        {p.is_active ? 'Ativo' : 'Inativo'}
+                      </span>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900 leading-snug">{p.full_name}</h3>
-                    <p className="text-xs text-slate-500">{p.email}</p>
-                    <span className="text-[11px] text-slate-400 mt-0.5 block">{p.department || 'Geral'}</span>
-                  </div>
+
+                  {/* Password Preview for Admin or Self */}
+                  {(isAdmin || isMe) && (
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between gap-2 text-xs text-slate-600 min-w-0">
+                      <div className="flex items-center space-x-2 min-w-0 flex-1">
+                        <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span className="font-mono font-medium truncate">
+                          Senha: {showPasswordMap[p.id] ? (p.password || '123456') : '••••••••'}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => toggleShowPassword(p.id)}
+                        className="text-slate-400 hover:text-slate-700 shrink-0 p-1"
+                        title="Alternar exibição da senha"
+                      >
+                        {showPasswordMap[p.id] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex flex-col items-end gap-1">
-                  {getRoleBadge(p.role)}
-                  <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      p.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                    }`}
-                  >
-                    {p.is_active ? 'Ativo' : 'Inativo'}
-                  </span>
+                {/* ACTION BUTTONS */}
+                <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs min-w-0">
+                  {canEditThisUser && (
+                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                      <button
+                        onClick={() => handleOpenEditModal(p)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 rounded-lg font-bold text-xs transition-colors shrink-0"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span className="truncate">{isMe ? 'Alterar Minha Senha' : 'Editar'}</span>
+                      </button>
+
+                      {isAdmin && !isMe && (
+                        <button
+                          onClick={() => handleToggleActive(p.id)}
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-colors shrink-0 ${
+                            p.is_active
+                              ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                          }`}
+                        >
+                          {p.is_active ? 'Desativar' : 'Ativar'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {isSuperAdmin && p.id !== currentUser.id && (
+                    <button
+                      onClick={() => setDeletingUserId(p.id)}
+                      className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors ml-auto shrink-0"
+                      title="Excluir Usuário"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </div>
-
-              {/* Password Preview for Admin */}
-              {isAdmin && (
-                <div className="mt-4 p-2.5 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between text-xs text-slate-600">
-                  <div className="flex items-center space-x-2">
-                    <Lock className="w-3.5 h-3.5 text-slate-400" />
-                    <span className="font-mono font-medium">
-                      Senha: {showPasswordMap[p.id] ? (p.password || '123456') : '••••••••'}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => toggleShowPassword(p.id)}
-                    className="text-slate-400 hover:text-slate-700"
-                    title="Alternar exibição da senha"
-                  >
-                    {showPasswordMap[p.id] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* ACTION BUTTONS FOR SUPER ADMIN & ADMIN */}
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
-              {isAdmin && (
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => handleOpenEditModal(p)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 rounded-lg font-bold text-xs transition-colors"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                    <span>Editar</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleToggleActive(p.id)}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
-                      p.is_active
-                        ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
-                        : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                    }`}
-                  >
-                    {p.is_active ? 'Desativar' : 'Ativar'}
-                  </button>
-                </div>
-              )}
-
-              {isSuperAdmin && p.id !== currentUser.id && (
-                <button
-                  onClick={() => setDeletingUserId(p.id)}
-                  className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors ml-auto"
-                  title="Excluir Usuário"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* NEW USER MODAL */}
       {isNewUserModalOpen && (

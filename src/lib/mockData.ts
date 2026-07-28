@@ -104,6 +104,7 @@ EXCEPTION WHEN duplicate_object THEN null; END $$;
 -- 2. ALTERAÇÃO DE TABELAS EXISTENTES (REMOVE NOT NULL E ADICIONA DEFAULTS PARA CORRIGIR ERRO 23502)
 DO $$ BEGIN
   IF EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'profiles') THEN
+    ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password TEXT DEFAULT '123456';
     ALTER TABLE public.profiles ALTER COLUMN email DROP NOT NULL;
     ALTER TABLE public.profiles ALTER COLUMN full_name DROP NOT NULL;
     ALTER TABLE public.profiles ALTER COLUMN full_name SET DEFAULT '';
@@ -290,6 +291,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   department TEXT DEFAULT 'Geral',
   avatar_url TEXT,
   is_active BOOLEAN DEFAULT true,
+  password TEXT DEFAULT '123456',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -455,18 +457,20 @@ CREATE TABLE IF NOT EXISTS public.push_subscriptions (
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (id, email, full_name, role, department, is_active)
+  INSERT INTO public.profiles (id, email, full_name, role, department, is_active, password)
   VALUES (
     NEW.id,
     NEW.email,
     COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', SPLIT_PART(NEW.email, '@', 1), 'Novo Usuário'),
     COALESCE((NEW.raw_user_meta_data->>'role')::user_role, 'operador'::user_role),
     COALESCE(NEW.raw_user_meta_data->>'department', 'Geral'),
-    true
+    true,
+    COALESCE(NEW.raw_user_meta_data->>'password', '123456')
   )
   ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
-    full_name = COALESCE(EXCLUDED.full_name, profiles.full_name);
+    full_name = COALESCE(EXCLUDED.full_name, profiles.full_name),
+    password = COALESCE(EXCLUDED.password, profiles.password);
   RETURN NEW;
 EXCEPTION WHEN OTHERS THEN
   RETURN NEW;

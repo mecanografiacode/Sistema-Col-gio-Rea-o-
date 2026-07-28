@@ -31,7 +31,7 @@ import {
   INITIAL_AUDIT_LOGS,
   INITIAL_NOTIFICATIONS
 } from './mockData';
-import { getSupabaseClient } from './supabase';
+import { getSupabaseClient, markSupabaseOffline } from './supabase';
 
 // Helper utilities for UUID validation and FK sanitization
 const isUUID = (val: string | undefined | null): boolean => {
@@ -187,8 +187,10 @@ class StorageService {
           ip_address: newLog.ip_address || null,
           created_at: newLog.created_at
         }]);
-      } catch (err) {
-        console.warn('Supabase audit log insert fallback:', err);
+      } catch (err: any) {
+        if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
+          markSupabaseOffline(err?.message || 'Failed to fetch');
+        }
       }
     }
 
@@ -207,9 +209,19 @@ class StorageService {
     }
   }
 
-  private setItem<T>(key: string, data: T[]) {
-    localStorage.setItem(key, JSON.stringify(data));
-    this.notify();
+  private setItem<T>(key: string, data: T[], notify: boolean = true) {
+    try {
+      const current = localStorage.getItem(key);
+      const next = JSON.stringify(data);
+      if (current !== next) {
+        localStorage.setItem(key, next);
+        if (notify) {
+          this.notify();
+        }
+      }
+    } catch (e) {
+      console.warn(`Error setting storage key ${key}:`, e);
+    }
   }
 
   // Clean payload helper for auto-seeding to Supabase
@@ -264,7 +276,7 @@ class StorageService {
         const { data, error } = await supabase.from(tableName).select('*').order(orderBy, { ascending });
         if (!error && data) {
           if (data.length > 0) {
-            this.setItem(cacheKey, data as T[]);
+            this.setItem(cacheKey, data as T[], false);
             return data as T[];
           } else {
             // Table in Supabase is empty (0 rows). Check if we have seed/local data to migrate to Supabase.
@@ -274,20 +286,32 @@ class StorageService {
               const sanitizedSeed = itemsToSeed.map((it) => this.sanitizeItemForSupabase(it));
               const { error: seedErr } = await supabase.from(tableName).insert(sanitizedSeed as any);
               if (!seedErr) {
-                this.setItem(cacheKey, itemsToSeed);
+                this.setItem(cacheKey, itemsToSeed, false);
                 return itemsToSeed;
-              } else {
-                console.warn(`Supabase auto-seed warning for ${tableName}:`, seedErr.message);
+              } else if (seedErr) {
+                if (seedErr.message?.includes('Failed to fetch')) {
+                  markSupabaseOffline(seedErr.message);
+                } else {
+                  console.warn(`Supabase auto-seed warning for ${tableName}:`, seedErr.message);
+                }
               }
             }
-            this.setItem(cacheKey, []);
+            this.setItem(cacheKey, [], false);
             return [];
           }
         } else if (error) {
-          console.warn(`Supabase query warning for ${tableName}:`, error.message);
+          if (error.message?.includes('Failed to fetch')) {
+            markSupabaseOffline(error.message);
+          } else {
+            console.warn(`Supabase query warning for ${tableName}:`, error.message);
+          }
         }
-      } catch (err) {
-        console.warn(`Supabase exception for ${tableName}:`, err);
+      } catch (err: any) {
+        if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
+          markSupabaseOffline(err?.message || 'TypeError');
+        } else {
+          console.warn(`Supabase exception for ${tableName}:`, err);
+        }
       }
     }
     return this.getItem<T>(cacheKey);
@@ -295,7 +319,79 @@ class StorageService {
 
   // --- PROFILES & USERS ---
   public async getProfiles(): Promise<UserProfile[]> {
-    return this.fetchFromSupabaseOrCache<UserProfile>('profiles', 'cr_profiles', INITIAL_PROFILES, 'created_at', false);
+    const cached = this.getItem<UserProfile>('cr_profiles');
+    const supabase = getSupabaseClient();
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+        if (!error && data) {
+          const remoteProfiles: UserProfile[] = data.map((p: any) => ({
+            id: p.id || crypto.randomUUID(),
+            email: p.email || 'usuario@colegioreacaodf.com',
+            full_name: p.full_name || 'Usuário Sem Nome',
+            role: (p.role as UserRole) || 'operador',
+            department: p.department || 'Geral',
+            avatar_url: p.avatar_url || undefined,
+            is_active: p.is_active ?? true,
+            created_at: p.created_at || new Date().toISOString(),
+            password: p.password || '123456'
+          }));
+
+          // Merge cached items that may not be in remoteProfiles yet
+          const merged = [...remoteProfiles];
+          for (const c of cached) {
+            if (!merged.some((m) => m.id === c.id || m.email.toLowerCase() === c.email.toLowerCase())) {
+              merged.push(c);
+              // Background push to Supabase
+              supabase.from('profiles').upsert([{
+                id: c.id,
+                email: c.email.toLowerCase(),
+                full_name: c.full_name,
+                role: c.role,
+                department: c.department,
+                avatar_url: c.avatar_url || null,
+                is_active: c.is_active,
+                password: c.password || '123456',
+                created_at: c.created_at
+              }]).then(({ error: e }) => {
+                if (e) {
+                  if (e.message?.includes('Failed to fetch')) {
+                    markSupabaseOffline(e.message);
+                  }
+                }
+              }).catch((e) => {
+                if (e?.message?.includes('Failed to fetch')) {
+                  markSupabaseOffline(e?.message);
+                }
+              });
+            }
+          }
+
+          this.setItem('cr_profiles', merged, false);
+          return merged;
+        } else if (error) {
+          if (error.message?.includes('Failed to fetch')) {
+            markSupabaseOffline(error.message);
+          } else {
+            console.warn('Supabase query error for profiles:', error.message);
+          }
+        }
+      } catch (err: any) {
+        if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
+          markSupabaseOffline(err?.message || 'TypeError');
+        } else {
+          console.warn('Supabase profiles exception:', err);
+        }
+      }
+    }
+
+    return cached.map((p) => ({
+      ...p,
+      password: p.password || '123456',
+      department: p.department || 'Geral',
+      is_active: p.is_active ?? true
+    }));
   }
 
   public async addProfile(profile: Omit<UserProfile, 'id' | 'created_at'>, actor: UserProfile | null): Promise<UserProfile> {
@@ -303,37 +399,79 @@ class StorageService {
     const newProfile: UserProfile = {
       ...profile,
       id: validId,
-      full_name: profile.full_name || 'Usuário Sem Nome',
+      full_name: profile.full_name?.trim() || 'Usuário Sem Nome',
       role: profile.role || 'operador',
-      department: profile.department || 'Geral',
-      password: profile.password || '123456',
+      department: profile.department?.trim() || 'Geral',
+      password: profile.password?.trim() || '123456',
       is_active: profile.is_active ?? true,
       created_at: new Date().toISOString()
     };
 
+    // Update local storage immediately
+    const profiles = this.getItem<UserProfile>('cr_profiles');
+    const existingIndex = profiles.findIndex(
+      (p) => p.id === newProfile.id || p.email.toLowerCase() === newProfile.email.toLowerCase()
+    );
+    if (existingIndex !== -1) {
+      profiles[existingIndex] = newProfile;
+    } else {
+      profiles.push(newProfile);
+    }
+    this.setItem('cr_profiles', profiles);
+
+    // Persist to Supabase if client available
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('profiles').insert([{
+        const payload = {
           id: newProfile.id,
-          email: newProfile.email,
+          email: newProfile.email.toLowerCase(),
           full_name: newProfile.full_name,
           role: newProfile.role,
           department: newProfile.department,
           avatar_url: newProfile.avatar_url || null,
           is_active: newProfile.is_active,
+          password: newProfile.password || '123456',
           created_at: newProfile.created_at
-        }]);
+        };
+
+        const { error: upsertErr } = await supabase.from('profiles').upsert([payload]);
+        if (upsertErr) {
+          console.warn('Supabase profile add/upsert error:', upsertErr.message);
+        } else {
+          console.log('Perfil salvo com sucesso na tabela profiles do Supabase:', newProfile.email);
+        }
+
+        // Try creating account in Supabase Auth as well if configured
+        try {
+          await supabase.auth.signUp({
+            email: newProfile.email,
+            password: newProfile.password || '123456',
+            options: {
+              data: {
+                full_name: newProfile.full_name,
+                role: newProfile.role,
+                department: newProfile.department
+              }
+            }
+          });
+        } catch (authErr) {
+          // Ignore if auth user already exists or auth admin disabled
+        }
       } catch (e) {
-        console.warn('Supabase profile add error:', e);
+        console.warn('Exceção ao adicionar perfil no Supabase:', e);
       }
     }
 
-    const profiles = this.getItem<UserProfile>('cr_profiles');
-    profiles.push(newProfile);
-    this.setItem('cr_profiles', profiles);
+    await this.logAudit(
+      actor,
+      'criacao',
+      'usuarios',
+      `Novo Usuário: ${newProfile.full_name}`,
+      undefined,
+      `Role: ${newProfile.role} | E-mail: ${newProfile.email}`
+    );
 
-    await this.logAudit(actor, 'criacao', 'usuarios', `Novo Usuário: ${newProfile.full_name}`, undefined, `Role: ${newProfile.role}`);
     return newProfile;
   }
 
@@ -348,13 +486,21 @@ class StorageService {
       const supabase = getSupabaseClient();
       if (supabase && isUUID(userId)) {
         try {
-          await supabase.from('profiles').update({
-            email: profiles[index].email,
+          const payload = {
+            id: userId,
+            email: profiles[index].email.toLowerCase(),
             full_name: profiles[index].full_name,
             role: profiles[index].role,
             department: profiles[index].department,
-            is_active: profiles[index].is_active
-          }).eq('id', userId);
+            avatar_url: profiles[index].avatar_url || null,
+            is_active: profiles[index].is_active,
+            password: profiles[index].password || '123456'
+          };
+
+          const { error } = await supabase.from('profiles').upsert([payload]);
+          if (error) {
+            console.warn('Supabase profile update error:', error.message);
+          }
         } catch (e) {
           console.warn('Supabase profile update error:', e);
         }

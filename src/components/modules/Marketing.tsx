@@ -29,7 +29,8 @@ import {
   RefreshCw,
   Lightbulb,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  List
 } from 'lucide-react';
 
 interface MarketingProps {
@@ -60,6 +61,10 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
   const [filterType, setFilterType] = useState<string>('todos');
   const [filterCategory, setFilterCategory] = useState<string>('todos');
   const [searchQuery, setSearchQuery] = useState('');
+  const [calendarViewMode, setCalendarViewMode] = useState<'grid' | 'agenda'>('grid');
+
+  // Kanban State
+  const [kanbanMobileCol, setKanbanMobileCol] = useState<'todos' | 'ideia' | 'producao' | 'aprovacao' | 'publicado'>('todos');
 
   // Modals State
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
@@ -337,16 +342,16 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
   return (
     <div className="space-y-6 pb-20 lg:pb-8 font-['Plus_Jakarta_Sans',sans-serif]">
       {/* Title Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs">
         <div>
           <div className="flex items-center space-x-2.5">
-            <div className="p-2.5 bg-red-600 text-white rounded-xl shadow-xs">
-              <Megaphone className="w-6 h-6" />
+            <div className="p-2.5 bg-red-600 text-white rounded-xl shadow-xs shrink-0">
+              <Megaphone className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div>
-              <div className="flex items-center space-x-2">
-                <h2 className="text-2xl font-serif-editorial font-bold text-gray-900">Comunicação & Marketing Digital</h2>
-                <span className="bg-pink-100 text-pink-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-pink-200 flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-xl sm:text-2xl font-serif-editorial font-bold text-gray-900 leading-tight">Comunicação & Marketing Digital</h2>
+                <span className="bg-pink-100 text-pink-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-pink-200 inline-flex items-center gap-1">
                   <Instagram className="w-3 h-3" /> @colegioreacao
                 </span>
               </div>
@@ -357,10 +362,10 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
           <button
             onClick={() => setActiveTab('ai_generator')}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            className={`flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
               activeTab === 'ai_generator'
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
                 : 'bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100'
@@ -372,7 +377,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
 
           <button
             onClick={() => handleOpenNewModalWithDate()}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white font-bold text-xs rounded-xl hover:bg-red-700 shadow-sm transition-colors"
+            className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white font-bold text-xs rounded-xl hover:bg-red-700 shadow-sm transition-colors"
           >
             <Plus className="w-4 h-4" />
             <span>Novo Post</span>
@@ -380,11 +385,11 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
         </div>
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="bg-white p-1.5 rounded-2xl border border-slate-200 flex flex-wrap items-center gap-1 text-xs font-bold shadow-2xs">
+      {/* Navigation Tabs - Horizontally scrollable on mobile */}
+      <div className="bg-white p-1.5 rounded-2xl border border-slate-200 flex items-center gap-1.5 text-xs font-bold shadow-2xs overflow-x-auto scrollbar-none whitespace-nowrap">
         <button
           onClick={() => setActiveTab('calendar')}
-          className={`px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 ${
+          className={`px-3.5 sm:px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 shrink-0 ${
             activeTab === 'calendar' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
@@ -394,7 +399,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
 
         <button
           onClick={() => setActiveTab('kanban')}
-          className={`px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 ${
+          className={`px-3.5 sm:px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 shrink-0 ${
             activeTab === 'kanban' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
@@ -404,7 +409,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
 
         <button
           onClick={() => setActiveTab('ai_generator')}
-          className={`px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 ${
+          className={`px-3.5 sm:px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 shrink-0 ${
             activeTab === 'ai_generator' ? 'bg-purple-600 text-white shadow-xs' : 'text-purple-700 bg-purple-50 hover:bg-purple-100'
           }`}
         >
@@ -414,7 +419,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
 
         <button
           onClick={() => setActiveTab('plan')}
-          className={`px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 ${
+          className={`px-3.5 sm:px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 shrink-0 ${
             activeTab === 'plan' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
@@ -424,7 +429,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
 
         <button
           onClick={() => setActiveTab('metrics')}
-          className={`px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 ${
+          className={`px-3.5 sm:px-4 py-2 rounded-xl transition-colors flex items-center space-x-2 shrink-0 ${
             activeTab === 'metrics' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
@@ -437,51 +442,75 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
       {activeTab === 'calendar' && (
         <div className="space-y-4">
           {/* Calendar Controls & Filters */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-            {/* Month Switcher */}
-            <div className="flex items-center space-x-3">
-              <button
-                onClick={handlePrevMonth}
-                className="p-2 hover:bg-slate-100 rounded-lg text-slate-700 transition-colors border border-slate-200"
-                title="Mês Anterior"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            {/* Month Switcher + View Mode Toggle */}
+            <div className="flex flex-wrap items-center justify-between sm:justify-start gap-3">
+              <div className="flex items-center space-x-2 sm:space-x-3">
+                <button
+                  onClick={handlePrevMonth}
+                  className="p-2 hover:bg-slate-100 rounded-lg text-slate-700 transition-colors border border-slate-200"
+                  title="Mês Anterior"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
 
-              <h3 className="text-base font-bold text-slate-900 min-w-[140px] text-center">
-                {monthNames[month]} {year}
-              </h3>
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 min-w-[120px] sm:min-w-[140px] text-center">
+                  {monthNames[month]} {year}
+                </h3>
 
-              <button
-                onClick={handleNextMonth}
-                className="p-2 hover:bg-slate-100 rounded-lg text-slate-700 transition-colors border border-slate-200"
-                title="Próximo Mês"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+                <button
+                  onClick={handleNextMonth}
+                  className="p-2 hover:bg-slate-100 rounded-lg text-slate-700 transition-colors border border-slate-200"
+                  title="Próximo Mês"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
 
-              <button
-                onClick={handleToday}
-                className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-200 transition-colors border border-slate-200"
-              >
-                Mês Atual
-              </button>
+                <button
+                  onClick={handleToday}
+                  className="px-2.5 py-1.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-200 transition-colors border border-slate-200"
+                >
+                  Hoje
+                </button>
+              </div>
+
+              {/* Grade vs Agenda Mode Toggle */}
+              <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
+                <button
+                  onClick={() => setCalendarViewMode('grid')}
+                  className={`px-3 py-1 rounded-lg flex items-center gap-1.5 transition-colors ${
+                    calendarViewMode === 'grid' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <CalendarIcon className="w-3.5 h-3.5 text-red-600" />
+                  <span>Grade</span>
+                </button>
+                <button
+                  onClick={() => setCalendarViewMode('agenda')}
+                  className={`px-3 py-1 rounded-lg flex items-center gap-1.5 transition-colors ${
+                    calendarViewMode === 'agenda' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <List className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Agenda</span>
+                </button>
+              </div>
             </div>
 
             {/* Quick Filters */}
-            <div className="flex flex-wrap items-center gap-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs w-full lg:w-auto">
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Buscar por palavra-chave..."
-                className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-900 w-44 focus:outline-none focus:ring-2 focus:ring-red-600"
+                className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-900 w-full focus:outline-none focus:ring-2 focus:ring-red-600"
               />
 
               <select
                 value={filterType}
                 onChange={(e) => setFilterType(e.target.value)}
-                className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-800 bg-white"
+                className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-800 bg-white w-full"
               >
                 <option value="todos">Todos Formatos</option>
                 <option value="reels">Reels / Vídeos</option>
@@ -493,7 +522,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
               <select
                 value={filterCategory}
                 onChange={(e) => setFilterCategory(e.target.value)}
-                className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-800 bg-white"
+                className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-800 bg-white w-full"
               >
                 <option value="todos">Todos os Pilares</option>
                 <option value="Captação de Alunos">Captação de Alunos</option>
@@ -505,27 +534,109 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* Month Grid */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-            {/* Days Header */}
-            <div className="grid grid-cols-7 bg-slate-900 text-white text-center py-2.5 text-xs font-bold border-b border-slate-800">
-              <span>DOM</span>
-              <span>SEG</span>
-              <span>TER</span>
-              <span>QUA</span>
-              <span>QUI</span>
-              <span>SEX</span>
-              <span>SÁB</span>
+          {/* Month Grid View */}
+          {calendarViewMode === 'grid' && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <div className="min-w-[700px]">
+                  {/* Days Header */}
+                  <div className="grid grid-cols-7 bg-slate-900 text-white text-center py-2.5 text-xs font-bold border-b border-slate-800">
+                    <span>DOM</span>
+                    <span>SEG</span>
+                    <span>TER</span>
+                    <span>QUA</span>
+                    <span>QUI</span>
+                    <span>SEX</span>
+                    <span>SÁB</span>
+                  </div>
+
+                  {/* Calendar Days Cells */}
+                  <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-100 bg-slate-50/30">
+                    {/* Empty leading offset cells */}
+                    {Array.from({ length: firstDayOfMonth }).map((_, i) => (
+                      <div key={`empty-${i}`} className="min-h-[110px] bg-slate-50/50 p-2" />
+                    ))}
+
+                    {/* Month Days */}
+                    {Array.from({ length: daysInMonth }).map((_, i) => {
+                      const dayNum = i + 1;
+                      const formattedDay = dayNum < 10 ? `0${dayNum}` : `${dayNum}`;
+                      const formattedMonth = month + 1 < 10 ? `0${month + 1}` : `${month + 1}`;
+                      const dateKey = `${year}-${formattedMonth}-${formattedDay}`;
+
+                      const dayPosts = filteredContents.filter((c) => c.scheduled_date === dateKey);
+
+                      const isToday =
+                        new Date().getDate() === dayNum &&
+                        new Date().getMonth() === month &&
+                        new Date().getFullYear() === year;
+
+                      return (
+                        <div
+                          key={dateKey}
+                          className={`min-h-[120px] p-2 transition-colors flex flex-col justify-between group hover:bg-red-50/30 ${
+                            isToday ? 'bg-red-50/60 ring-2 ring-red-500 ring-inset' : 'bg-white'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span
+                                className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+                                  isToday ? 'bg-red-600 text-white' : 'text-slate-700'
+                                }`}
+                              >
+                                {dayNum}
+                              </span>
+
+                              <button
+                                onClick={() => handleOpenNewModalWithDate(dateKey)}
+                                className="text-red-600 hover:bg-red-100 p-1 rounded-md transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
+                                title="Agendar neste dia"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {/* Day Scheduled Posts */}
+                            <div className="space-y-1">
+                              {dayPosts.map((post) => (
+                                <div
+                                  key={post.id}
+                                  onClick={() => setSelectedContent(post)}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:border-red-300 shadow-2xs hover:shadow-xs cursor-pointer transition-all space-y-1"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-1">
+                                    {getContentTypeBadge(post.content_type)}
+                                    {getStatusBadge(post.status)}
+                                  </div>
+                                  <p className="text-[11px] font-bold text-slate-800 line-clamp-2 leading-tight">
+                                    {post.title}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {dayPosts.length === 0 && (
+                            <button
+                              onClick={() => handleOpenNewModalWithDate(dateKey)}
+                              className="text-[10px] text-slate-400 py-1 hover:text-red-600 text-center transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
+                            >
+                              + Agendar Post
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
             </div>
+          )}
 
-            {/* Calendar Days Cells */}
-            <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-100 bg-slate-50/30">
-              {/* Empty leading offset cells */}
-              {Array.from({ length: firstDayOfMonth }).map((_, i) => (
-                <div key={`empty-${i}`} className="min-h-[110px] bg-slate-50/50 p-2" />
-              ))}
-
-              {/* Month Days */}
+          {/* Agenda / List View for Mobile & Compact Browsing */}
+          {calendarViewMode === 'agenda' && (
+            <div className="space-y-3">
               {Array.from({ length: daysInMonth }).map((_, i) => {
                 const dayNum = i + 1;
                 const formattedDay = dayNum < 10 ? `0${dayNum}` : `${dayNum}`;
@@ -533,148 +644,210 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                 const dateKey = `${year}-${formattedMonth}-${formattedDay}`;
 
                 const dayPosts = filteredContents.filter((c) => c.scheduled_date === dateKey);
-
                 const isToday =
                   new Date().getDate() === dayNum &&
                   new Date().getMonth() === month &&
                   new Date().getFullYear() === year;
 
+                const dateObj = new Date(year, month, dayNum);
+                const weekDayName = dateObj.toLocaleDateString('pt-BR', { weekday: 'long' });
+
+                if (searchQuery.trim() || filterType !== 'todos' || filterCategory !== 'todos') {
+                  if (dayPosts.length === 0) return null;
+                }
+
                 return (
                   <div
                     key={dateKey}
-                    className={`min-h-[120px] p-2 transition-colors flex flex-col justify-between group hover:bg-red-50/30 ${
-                      isToday ? 'bg-red-50/60 ring-2 ring-red-500 ring-inset' : 'bg-white'
+                    className={`bg-white rounded-2xl border p-4 shadow-2xs space-y-3 ${
+                      isToday ? 'border-red-500 ring-2 ring-red-500/20 bg-red-50/20' : 'border-slate-200'
                     }`}
                   >
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                      <div className="flex items-center space-x-2">
                         <span
-                          className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
-                            isToday ? 'bg-red-600 text-white' : 'text-slate-700'
+                          className={`text-xs font-bold px-2.5 py-1 rounded-lg ${
+                            isToday ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'
                           }`}
                         >
-                          {dayNum}
+                          Dia {dayNum}
                         </span>
-
-                        <button
-                          onClick={() => handleOpenNewModalWithDate(dateKey)}
-                          className="opacity-0 group-hover:opacity-100 text-red-600 hover:bg-red-100 p-1 rounded-md transition-opacity"
-                          title="Agendar neste dia"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
+                        <span className="text-xs font-bold text-slate-800 capitalize">
+                          {weekDayName}, {formattedDay}/{formattedMonth}
+                        </span>
+                        {isToday && (
+                          <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-red-100 text-red-800">
+                            Hoje
+                          </span>
+                        )}
                       </div>
 
-                      {/* Day Scheduled Posts */}
-                      <div className="space-y-1">
+                      <button
+                        onClick={() => handleOpenNewModalWithDate(dateKey)}
+                        className="inline-flex items-center gap-1 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-lg transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Agendar</span>
+                      </button>
+                    </div>
+
+                    {dayPosts.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic py-1">Nenhum post agendado para esta data.</p>
+                    ) : (
+                      <div className="space-y-2.5">
                         {dayPosts.map((post) => (
                           <div
                             key={post.id}
                             onClick={() => setSelectedContent(post)}
-                            className="p-1.5 rounded-lg border border-slate-200 bg-white hover:border-red-300 shadow-2xs hover:shadow-xs cursor-pointer transition-all space-y-1"
+                            className="p-3 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:border-red-300 shadow-2xs cursor-pointer transition-all space-y-2"
                           >
-                            <div className="flex items-center justify-between gap-1">
-                              {getContentTypeBadge(post.content_type)}
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center space-x-2">
+                                {getContentTypeBadge(post.content_type)}
+                                <span className="text-[11px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+                                  {post.category}
+                                </span>
+                              </div>
                               {getStatusBadge(post.status)}
                             </div>
-                            <p className="text-[11px] font-bold text-slate-800 line-clamp-2 leading-tight">
-                              {post.title}
-                            </p>
+
+                            <h4 className="text-xs sm:text-sm font-bold text-slate-900">{post.title}</h4>
+
+                            {post.hook && (
+                              <p className="text-xs text-amber-900 bg-amber-50 p-2 rounded-lg border border-amber-200/60 italic">
+                                ⚡ "{post.hook}"
+                              </p>
+                            )}
+
+                            <div className="flex items-center justify-between text-[11px] pt-1 text-slate-500 border-t border-slate-100">
+                              <span className="flex items-center gap-1">
+                                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                {post.has_image_authorization ? 'LGPD Autorizado' : 'Sem foto de aluno'}
+                              </span>
+                              <span className="text-red-600 font-bold hover:underline">Ver Detalhes →</span>
+                            </div>
                           </div>
                         ))}
                       </div>
-                    </div>
-
-                    {dayPosts.length === 0 && (
-                      <button
-                        onClick={() => handleOpenNewModalWithDate(dateKey)}
-                        className="text-[10px] text-slate-400 opacity-0 group-hover:opacity-100 py-1 hover:text-red-600 text-center transition-opacity"
-                      >
-                        + Agendar Post
-                      </button>
                     )}
                   </div>
                 );
               })}
             </div>
-          </div>
+          )}
         </div>
       )}
 
       {/* --- TAB 2: KANBAN EDITORIAL --- */}
       {activeTab === 'kanban' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-start">
-          {[
-            { id: 'ideia', label: '1. Ideia / Planejamento', bg: 'bg-slate-50 border-slate-200' },
-            { id: 'producao', label: '2. Em Produção (Gravação/Design)', bg: 'bg-blue-50/50 border-blue-100' },
-            { id: 'aprovacao', label: '3. Aprovação Pedagógica', bg: 'bg-amber-50/50 border-amber-100' },
-            { id: 'publicado', label: '4. Publicado no Instagram', bg: 'bg-emerald-50/50 border-emerald-100' }
-          ].map((col) => {
-            const colContents = contents.filter((c) => c.status === col.id);
+        <div className="space-y-4">
+          {/* Mobile Column Selector Tabs */}
+          <div className="md:hidden flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-1 whitespace-nowrap">
+            {[
+              { id: 'todos', label: 'Todas' },
+              { id: 'ideia', label: '1. Ideia' },
+              { id: 'producao', label: '2. Em Produção' },
+              { id: 'aprovacao', label: '3. Em Aprovação' },
+              { id: 'publicado', label: '4. Publicado' }
+            ].map((colTab) => (
+              <button
+                key={colTab.id}
+                onClick={() => setKanbanMobileCol(colTab.id as any)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all ${
+                  kanbanMobileCol === colTab.id
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {colTab.label}
+              </button>
+            ))}
+          </div>
 
-            return (
-              <div key={col.id} className={`p-3.5 rounded-2xl border ${col.bg} flex flex-col space-y-3`}>
-                <div className="flex items-center justify-between px-1">
-                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{col.label}</h3>
-                  <span className="bg-white text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200 shadow-2xs">
-                    {colContents.length}
-                  </span>
-                </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-start">
+            {[
+              { id: 'ideia', label: '1. Ideia / Planejamento', bg: 'bg-slate-50 border-slate-200' },
+              { id: 'producao', label: '2. Em Produção (Gravação/Design)', bg: 'bg-blue-50/50 border-blue-100' },
+              { id: 'aprovacao', label: '3. Aprovação Pedagógica', bg: 'bg-amber-50/50 border-amber-100' },
+              { id: 'publicado', label: '4. Publicado no Instagram', bg: 'bg-emerald-50/50 border-emerald-100' }
+            ].map((col) => {
+              // Hide columns if mobile filter is active
+              if (kanbanMobileCol !== 'todos' && kanbanMobileCol !== col.id) {
+                return null;
+              }
 
-                <div className="space-y-3 min-h-[300px]">
-                  {colContents.map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => setSelectedContent(item)}
-                      className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-all cursor-pointer space-y-2.5 group"
-                    >
-                      <div className="flex items-center justify-between">
-                        {getContentTypeBadge(item.content_type)}
-                        <span className="text-[10px] text-slate-400 font-medium">
-                          {new Date(item.scheduled_date).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
-                        </span>
+              const colContents = contents.filter((c) => c.status === col.id);
+
+              return (
+                <div key={col.id} className={`p-3.5 rounded-2xl border ${col.bg} flex flex-col space-y-3`}>
+                  <div className="flex items-center justify-between px-1">
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{col.label}</h3>
+                    <span className="bg-white text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200 shadow-2xs">
+                      {colContents.length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-3 min-h-[200px] md:min-h-[300px]">
+                    {colContents.length === 0 ? (
+                      <div className="p-4 rounded-xl border border-dashed border-slate-200 bg-white/50 text-center text-xs text-slate-400">
+                        Nenhum post nesta fase
                       </div>
-
-                      <h4 className="text-xs font-bold text-slate-900 group-hover:text-red-600 transition-colors">
-                        {item.title}
-                      </h4>
-
-                      {item.category && (
-                        <span className="inline-block text-[10px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
-                          📌 {item.category}
-                        </span>
-                      )}
-
-                      {/* Hook preview if available */}
-                      {item.hook && (
-                        <p className="text-[11px] text-slate-600 bg-amber-50/70 p-2 rounded-lg border border-amber-100 italic line-clamp-2">
-                          ⚡ <strong>Gancho 3s:</strong> "{item.hook}"
-                        </p>
-                      )}
-
-                      {/* LGPD / ECA COMPLIANCE BADGE */}
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[10px]">
-                        <span
-                          className={`inline-flex items-center gap-1 font-semibold ${
-                            item.has_image_authorization ? 'text-emerald-700' : 'text-amber-700'
-                          }`}
+                    ) : (
+                      colContents.map((item) => (
+                        <div
+                          key={item.id}
+                          onClick={() => setSelectedContent(item)}
+                          className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-all cursor-pointer space-y-2.5 group"
                         >
-                          <ShieldCheck className="w-3.5 h-3.5" />
-                          {item.has_image_authorization ? 'LGPD Autorizada' : 'Sem Imagem de Alunos'}
-                        </span>
+                          <div className="flex items-center justify-between gap-1">
+                            {getContentTypeBadge(item.content_type)}
+                            <span className="text-[10px] text-slate-400 font-medium shrink-0">
+                              {new Date(item.scheduled_date).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                            </span>
+                          </div>
 
-                        {item.asset_link && (
-                          <span className="text-blue-600 flex items-center gap-0.5 font-bold hover:underline">
-                            Design <ExternalLink className="w-2.5 h-2.5" />
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                          <h4 className="text-xs font-bold text-slate-900 group-hover:text-red-600 transition-colors">
+                            {item.title}
+                          </h4>
+
+                          {item.category && (
+                            <span className="inline-block text-[10px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                              📌 {item.category}
+                            </span>
+                          )}
+
+                          {/* Hook preview if available */}
+                          {item.hook && (
+                            <p className="text-[11px] text-slate-600 bg-amber-50/70 p-2 rounded-lg border border-amber-100 italic line-clamp-2">
+                              ⚡ <strong>Gancho 3s:</strong> "{item.hook}"
+                            </p>
+                          )}
+
+                          {/* LGPD / ECA COMPLIANCE BADGE */}
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[10px]">
+                            <span
+                              className={`inline-flex items-center gap-1 font-semibold ${
+                                item.has_image_authorization ? 'text-emerald-700' : 'text-amber-700'
+                              }`}
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              {item.has_image_authorization ? 'LGPD Autorizada' : 'Sem Imagem de Alunos'}
+                            </span>
+
+                            {item.asset_link && (
+                              <span className="text-blue-600 flex items-center gap-0.5 font-bold hover:underline">
+                                Design <ExternalLink className="w-2.5 h-2.5" />
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -682,16 +855,16 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
       {activeTab === 'ai_generator' && (
         <div className="space-y-6">
           {/* AI Banner Header */}
-          <div className="bg-gradient-to-r from-purple-900 via-slate-900 to-indigo-900 text-white p-6 rounded-2xl shadow-xl space-y-4">
+          <div className="bg-gradient-to-r from-purple-900 via-slate-900 to-indigo-900 text-white p-4 sm:p-6 rounded-2xl shadow-xl space-y-4">
             <div className="flex items-start justify-between">
               <div className="space-y-1">
                 <span className="bg-purple-500/30 text-purple-200 border border-purple-400/30 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider inline-flex items-center gap-1">
                   <Sparkles className="w-3.5 h-3.5 text-purple-300" /> Powered by Gemini 3.1 Flash Lite
                 </span>
-                <h3 className="text-xl font-serif-editorial font-bold">
+                <h3 className="text-lg sm:text-xl font-serif-editorial font-bold">
                   Gerador de Roteiros, Reels e Estratégias para Instagram
                 </h3>
-                <p className="text-xs text-purple-200/90 max-w-2xl">
+                <p className="text-xs text-purple-200/90 max-w-2xl leading-relaxed">
                   Crie ganchos irresistíveis nos primeiros 3 segundos, roteiros de vídeos curtos, estruturas de carrosséis e legendas de alto engajamento focadas em captar novas famílias para o Colégio Reação.
                 </p>
               </div>
@@ -702,7 +875,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
               <span className="text-[11px] font-bold text-purple-300 block mb-2">
                 Sugestões Rápidas de Campanha:
               </span>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1.5 sm:gap-2">
                 {[
                   'Captação de Matrículas 2027',
                   'Laboratório de Robótica & TI',
@@ -714,7 +887,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                   <button
                     key={preset}
                     onClick={() => setAiObjective(preset)}
-                    className="px-3 py-1 bg-purple-800/40 hover:bg-purple-700/60 border border-purple-500/30 text-white text-xs font-medium rounded-lg transition-colors"
+                    className="px-2.5 sm:px-3 py-1 bg-purple-800/40 hover:bg-purple-700/60 border border-purple-500/30 text-white text-[11px] sm:text-xs font-medium rounded-lg transition-colors"
                   >
                     + {preset}
                   </button>
@@ -724,12 +897,12 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
           </div>
 
           {/* AI Generation Form */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <h4 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
               <Lightbulb className="w-4 h-4 text-purple-600" /> Configuração da Geração
             </h4>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                   Objetivo da Campanha
@@ -822,7 +995,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
           {/* Generated Ideas Result */}
           {aiIdeas.length > 0 && (
             <div className="space-y-4">
-              <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <h4 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Ideias Sugeridas ({aiIdeas.length})
               </h4>
 
@@ -830,17 +1003,17 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                 {aiIdeas.map((idea, idx) => (
                   <div
                     key={idx}
-                    className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between space-y-4 hover:shadow-md transition-shadow"
+                    className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-4 hover:shadow-md transition-shadow"
                   >
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         {getContentTypeBadge(idea.content_type)}
-                        <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                        <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
                           {idea.category}
                         </span>
                       </div>
 
-                      <h3 className="text-sm font-bold text-slate-900 leading-snug">{idea.title}</h3>
+                      <h3 className="text-xs sm:text-sm font-bold text-slate-900 leading-snug">{idea.title}</h3>
 
                       {/* Hook Box */}
                       {idea.hook && (
@@ -897,19 +1070,19 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                       )}
                     </div>
 
-                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                       <span
                         className={`text-[10px] font-semibold flex items-center gap-1 ${
                           idea.has_image_authorization ? 'text-emerald-700' : 'text-amber-700'
                         }`}
                       >
-                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
                         {idea.has_image_authorization ? 'Requer LGPD' : 'Sem Imagens de Alunos'}
                       </span>
 
                       <button
                         onClick={() => handleConvertIdeaToPost(idea)}
-                        className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-2xs transition-colors flex items-center gap-1"
+                        className="w-full sm:w-auto px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-2xs transition-colors flex items-center justify-center gap-1"
                       >
                         <Plus className="w-3.5 h-3.5" />
                         <span>Agendar no Calendário</span>
@@ -926,7 +1099,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
       {/* --- TAB 4: PLANO ESTRATÉGICO & PILARES --- */}
       {activeTab === 'plan' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-2">
               <span className="text-xs font-bold text-slate-500 uppercase">Meta Semanal de Reels</span>
               <div className="flex items-baseline justify-between">
@@ -965,8 +1138,8 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
           </div>
 
           {/* Pilares Editoriais */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <h3 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wider">
               Pilares Editoriais do Colégio Reação
             </h3>
 
@@ -976,7 +1149,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                   <h4 className="text-xs font-bold text-slate-900">1. Excelência Pedagógica & Aprovações (40%)</h4>
                   <span className="text-xs font-bold text-blue-600">Captação</span>
                 </div>
-                <p className="text-xs text-slate-600">
+                <p className="text-xs text-slate-600 leading-relaxed">
                   Destaques dos projetos de robótica, simulação de exames, olimpíadas de conhecimento e índice de aprovação nas universidades.
                 </p>
               </div>
@@ -986,7 +1159,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                   <h4 className="text-xs font-bold text-slate-900">2. Formação Humana & Esportes (30%)</h4>
                   <span className="text-xs font-bold text-emerald-600">Valores</span>
                 </div>
-                <p className="text-xs text-slate-600">
+                <p className="text-xs text-slate-600 leading-relaxed">
                   Jogos escolares, inteligência emocional, trabalho em equipe e projetos sociais promovidos pelos alunos do Colégio Reação.
                 </p>
               </div>
@@ -996,7 +1169,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                   <h4 className="text-xs font-bold text-slate-900">3. Infraestrutura & Segurança (15%)</h4>
                   <span className="text-xs font-bold text-purple-600">Confiança</span>
                 </div>
-                <p className="text-xs text-slate-600">
+                <p className="text-xs text-slate-600 leading-relaxed">
                   Salas climatizadas, laboratórios modernos, catracas de acesso seguro e câmeras para tranquilidade dos pais.
                 </p>
               </div>
@@ -1006,7 +1179,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                   <h4 className="text-xs font-bold text-slate-900">4. Depoimentos & Comunidade (15%)</h4>
                   <span className="text-xs font-bold text-amber-600">Prova Social</span>
                 </div>
-                <p className="text-xs text-slate-600">
+                <p className="text-xs text-slate-600 leading-relaxed">
                   Relatos sinceros de pais e alunos sobre a experiência no colégio, satisfação e atendimento do corpo docente.
                 </p>
               </div>
@@ -1018,19 +1191,20 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
       {/* --- TAB 5: MÉTRICAS DE IMPACTO --- */}
       {activeTab === 'metrics' && (
         <div className="space-y-6">
-          <div className="flex justify-between items-center">
-            <h3 className="text-sm font-bold text-slate-800 uppercase">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <h3 className="text-xs sm:text-sm font-bold text-slate-800 uppercase">
               Relatórios Semestrais & Desempenho do Instagram
             </h3>
             <button
               onClick={() => setIsNewMetricModalOpen(true)}
-              className="px-3.5 py-2 bg-slate-900 text-white font-bold text-xs rounded-xl hover:bg-slate-800 transition-colors"
+              className="w-full sm:w-auto px-3.5 py-2 bg-slate-900 text-white font-bold text-xs rounded-xl hover:bg-slate-800 transition-colors text-center justify-center inline-flex items-center gap-1"
             >
-              + Registrar Métrica Semanal
+              <Plus className="w-3.5 h-3.5" />
+              <span>Registrar Métrica Semanal</span>
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {metrics.map((m) => (
               <div key={m.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2">
@@ -1066,18 +1240,18 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
 
       {/* --- NEW / EDIT CONTENT MODAL --- */}
       {isNewModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="px-6 py-4 bg-red-600 text-white flex items-center justify-between">
-              <h3 className="text-sm font-bold flex items-center gap-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white w-full max-w-xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-4 sm:px-6 py-3.5 bg-red-600 text-white flex items-center justify-between shrink-0">
+              <h3 className="text-xs sm:text-sm font-bold flex items-center gap-2">
                 <Megaphone className="w-4 h-4" /> Agendar Conteúdo no Calendário
               </h3>
-              <button onClick={() => setIsNewModalOpen(false)} className="text-white hover:opacity-80">
+              <button onClick={() => setIsNewModalOpen(false)} className="text-white hover:opacity-80 p-1">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateContent} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+            <form onSubmit={handleCreateContent} className="p-4 sm:p-6 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Título do Post / Tema</label>
                 <input
@@ -1090,7 +1264,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Formato</label>
                   <select
@@ -1172,7 +1346,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Hashtags</label>
                   <input
@@ -1196,33 +1370,35 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
               </div>
 
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-                <label className="flex items-center space-x-2 cursor-pointer">
+                <label className="flex items-start space-x-2 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={hasAuthImage}
                     onChange={(e) => setHasAuthImage(e.target.checked)}
-                    className="w-4 h-4 text-red-600 rounded focus:ring-red-500"
+                    className="w-4 h-4 mt-0.5 text-red-600 rounded focus:ring-red-500 shrink-0"
                   />
-                  <span className="text-xs font-bold text-slate-800">
-                    Possui autorização de uso de imagem? (LGPD / ECA)
-                  </span>
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 block">
+                      Possui autorização de uso de imagem? (LGPD / ECA)
+                    </span>
+                    <span className="text-[11px] text-slate-500 block mt-0.5">
+                      Verificação obrigatória para posts contendo fotos ou vídeos de alunos do Colégio Reação.
+                    </span>
+                  </div>
                 </label>
-                <p className="text-[11px] text-slate-500 mt-1 pl-6">
-                  Verificação obrigatória para posts contendo fotos ou vídeos de alunos do Colégio Reação.
-                </p>
               </div>
 
-              <div className="pt-3 flex justify-end space-x-2">
+              <div className="pt-3 border-t border-slate-100 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsNewModalOpen(false)}
-                  className="px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg hover:bg-slate-50"
+                  className="w-full sm:w-auto px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg hover:bg-slate-50 text-center"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 shadow-sm"
+                  className="w-full sm:w-auto px-5 py-2 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 shadow-sm text-center"
                 >
                   Salvar no Calendário
                 </button>
@@ -1234,25 +1410,25 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
 
       {/* --- SELECTED CONTENT DETAIL MODAL --- */}
       {selectedContent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-4 sm:px-6 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
               <div>
                 <div className="flex items-center space-x-2">
                   {getContentTypeBadge(selectedContent.content_type)}
                   <span className="text-xs text-red-400 font-mono font-bold">{selectedContent.category}</span>
                 </div>
-                <h3 className="text-base font-bold text-white mt-1">{selectedContent.title}</h3>
+                <h3 className="text-sm sm:text-base font-bold text-white mt-1">{selectedContent.title}</h3>
               </div>
-              <button onClick={() => setSelectedContent(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setSelectedContent(null)} className="text-slate-400 hover:text-white p-1">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+            <div className="p-4 sm:p-6 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Mudar Estágio de Produção</label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {[
                     { id: 'ideia', label: '1. Ideia / Planejamento', bg: 'bg-slate-900' },
                     { id: 'producao', label: '2. Em Produção', bg: 'bg-blue-600' },
@@ -1308,17 +1484,17 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                 </a>
               )}
 
-              <div className="pt-3 border-t border-slate-200 flex items-center justify-between">
+              <div className="pt-3 border-t border-slate-200 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-2">
                 <button
                   onClick={() => handleDeletePost(selectedContent.id)}
-                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs rounded-lg transition-colors flex items-center gap-1"
+                  className="w-full sm:w-auto px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-1"
                 >
                   <Trash2 className="w-3.5 h-3.5" /> Excluir Post
                 </button>
 
                 <button
                   onClick={() => setSelectedContent(null)}
-                  className="px-4 py-1.5 bg-slate-900 text-white font-bold text-xs rounded-lg"
+                  className="w-full sm:w-auto px-4 py-2 bg-slate-900 text-white font-bold text-xs rounded-lg text-center"
                 >
                   Fechar
                 </button>
@@ -1330,13 +1506,13 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
 
       {/* --- NEW METRIC MODAL --- */}
       {isNewMetricModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
-              <h3 className="text-sm font-bold flex items-center gap-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-4 sm:px-6 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <h3 className="text-xs sm:text-sm font-bold flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-emerald-400" /> Registrar Métrica do Perfil
               </h3>
-              <button onClick={() => setIsNewMetricModalOpen(false)} className="text-white hover:opacity-80">
+              <button onClick={() => setIsNewMetricModalOpen(false)} className="text-white hover:opacity-80 p-1">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1356,7 +1532,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                 );
                 setIsNewMetricModalOpen(false);
               }}
-              className="p-6 space-y-4"
+              className="p-4 sm:p-6 space-y-4 overflow-y-auto"
             >
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Rótulo do Período</label>
@@ -1370,7 +1546,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Alcance Total</label>
                   <input
@@ -1395,7 +1571,7 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Novos Seguidores</label>
                   <input
@@ -1419,17 +1595,17 @@ export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
                 </div>
               </div>
 
-              <div className="pt-3 flex justify-end space-x-2">
+              <div className="pt-3 border-t border-slate-100 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsNewMetricModalOpen(false)}
-                  className="px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg hover:bg-slate-50"
+                  className="w-full sm:w-auto px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg hover:bg-slate-50 text-center"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-slate-900 text-white text-xs font-bold rounded-lg hover:bg-slate-800 shadow-sm"
+                  className="w-full sm:w-auto px-5 py-2 bg-slate-900 text-white text-xs font-bold rounded-lg hover:bg-slate-800 shadow-sm text-center"
                 >
                   Salvar Métrica
                 </button>

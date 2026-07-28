@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { storage } from '../lib/storage';
 import {
   Bell,
   Download,
@@ -10,7 +11,11 @@ import {
   UserCheck,
   User,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Key,
+  X,
+  Lock,
+  Check
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -33,7 +38,62 @@ export const Header: React.FC<HeaderProps> = ({
   canInstallPWA
 }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordStatus, setPasswordStatus] = useState<{ message: string; isError: boolean } | null>(null);
+  const [isSavingPassword, setIsSavingPassword] = useState(false);
+
   const isDbConfigured = isSupabaseConfigured();
+
+  const handleOpenPasswordModal = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowUserMenu(false);
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordStatus(null);
+    setIsPasswordModalOpen(true);
+  };
+
+  const handleChangePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordStatus(null);
+
+    if (!newPassword.trim()) {
+      setPasswordStatus({ message: 'Digite a nova senha desejada.', isError: true });
+      return;
+    }
+
+    if (newPassword.trim().length < 4) {
+      setPasswordStatus({ message: 'A senha deve ter pelo menos 4 caracteres.', isError: true });
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordStatus({ message: 'A confirmação de senha não confere.', isError: true });
+      return;
+    }
+
+    setIsSavingPassword(true);
+    try {
+      await storage.updateProfile(
+        currentUser.id,
+        { password: newPassword.trim() },
+        currentUser
+      );
+      setPasswordStatus({ message: 'Sua senha foi alterada com sucesso!', isError: false });
+      setTimeout(() => {
+        setIsPasswordModalOpen(false);
+        setNewPassword('');
+        setConfirmPassword('');
+      }, 1200);
+    } catch (err) {
+      console.error('Erro ao alterar senha:', err);
+      setPasswordStatus({ message: 'Erro ao salvar nova senha. Tente novamente.', isError: true });
+    } finally {
+      setIsSavingPassword(false);
+    }
+  };
 
   const getRoleBadge = (role: UserProfile['role']) => {
     switch (role) {
@@ -133,36 +193,43 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {/* Profile Dropdown */}
-          <div className="relative">
+          <div className="relative shrink-0">
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
               className="flex items-center space-x-2 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
             >
-              <div className="w-8 h-8 rounded-full bg-slate-800 text-white font-bold text-xs flex items-center justify-center ring-2 ring-slate-200 uppercase">
+              <div className="w-8 h-8 rounded-full bg-slate-800 text-white font-bold text-xs flex items-center justify-center ring-2 ring-slate-200 uppercase shrink-0">
                 {currentUser.full_name.charAt(0) || 'U'}
               </div>
-              <div className="hidden lg:block text-left">
-                <p className="text-xs font-semibold text-slate-800 leading-none">{currentUser.full_name}</p>
-                <div className="mt-0.5">{getRoleBadge(currentUser.role)}</div>
+              <div className="hidden lg:block text-left min-w-0 max-w-[140px]">
+                <p className="text-xs font-semibold text-slate-800 leading-none truncate">{currentUser.full_name}</p>
+                <div className="mt-0.5 truncate">{getRoleBadge(currentUser.role)}</div>
               </div>
             </button>
 
             {/* Dropdown Menu */}
             {showUserMenu && (
               <div
-                className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150"
+                className="absolute right-0 mt-2 w-72 max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150"
                 onClick={() => setShowUserMenu(false)}
               >
-                <div className="px-4 py-2 border-b border-slate-100">
-                  <p className="text-sm font-bold text-slate-900">{currentUser.full_name}</p>
+                <div className="px-4 py-2 border-b border-slate-100 min-w-0">
+                  <p className="text-sm font-bold text-slate-900 truncate">{currentUser.full_name}</p>
                   <p className="text-xs text-slate-500 truncate">{currentUser.email}</p>
-                  <div className="mt-2 flex items-center justify-between">
-                    <span className="text-[11px] text-slate-500">Setor: {currentUser.department}</span>
+                  <div className="mt-2 flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-[11px] text-slate-500 truncate">Setor: {currentUser.department}</span>
                     {getRoleBadge(currentUser.role)}
                   </div>
                 </div>
 
                 <div className="pt-1">
+                  <button
+                    onClick={handleOpenPasswordModal}
+                    className="w-full text-left px-4 py-2 text-xs text-red-700 hover:bg-red-50 font-bold flex items-center space-x-2"
+                  >
+                    <Key className="w-4 h-4 text-red-600" />
+                    <span>Alterar Minha Senha</span>
+                  </button>
                   <button
                     onClick={onSwitchUser}
                     className="w-full text-left px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center space-x-2"
@@ -183,6 +250,100 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
       </div>
+
+      {/* MODAL ALTERAR SENHA DO PRÓPRIO USUÁRIO */}
+      {isPasswordModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 bg-[#D32F2F] text-white flex items-center justify-between">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Key className="w-4 h-4" /> Alterar Minha Senha
+              </h3>
+              <button
+                onClick={() => setIsPasswordModalOpen(false)}
+                className="text-white hover:opacity-80"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleChangePasswordSubmit} className="p-6 space-y-4">
+              <div className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                <p className="font-bold text-slate-800">{currentUser.full_name}</p>
+                <p className="text-[11px] text-slate-500">{currentUser.email}</p>
+              </div>
+
+              {passwordStatus && (
+                <div
+                  className={`p-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${
+                    passwordStatus.isError
+                      ? 'bg-rose-50 text-rose-800 border border-rose-200'
+                      : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                  }`}
+                >
+                  {passwordStatus.isError ? (
+                    <X className="w-4 h-4 shrink-0" />
+                  ) : (
+                    <Check className="w-4 h-4 shrink-0" />
+                  )}
+                  <span>{passwordStatus.message}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Nova Senha
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="password"
+                    required
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Digite a nova senha"
+                    className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Confirmar Nova Senha
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="password"
+                    required
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Repita a nova senha"
+                    className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPasswordModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingPassword}
+                  className="px-5 py-2 bg-[#D32F2F] text-white text-xs font-bold rounded-lg hover:bg-red-800 disabled:opacity-50 shadow-sm"
+                >
+                  {isSavingPassword ? 'Salvando...' : 'Atualizar Senha'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </header>
   );
 };

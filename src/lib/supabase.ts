@@ -22,8 +22,25 @@ const getSupabaseCredentials = () => {
 };
 
 let clientInstance: SupabaseClient | null = null;
+let offlineUntil = 0;
+
+export const markSupabaseOffline = (reason?: string) => {
+  const wasOnline = offlineUntil === 0;
+  offlineUntil = Date.now() + 30000; // Cooldown 30s
+  if (wasOnline) {
+    console.warn(`[Supabase Offline] Conexão indisponível (${reason || 'Failed to fetch'}). Operando em modo de dados locais por 30s.`);
+  }
+};
+
+export const resetSupabaseOfflineStatus = () => {
+  offlineUntil = 0;
+};
 
 export const getSupabaseClient = (): SupabaseClient | null => {
+  if (Date.now() < offlineUntil) {
+    return null; // Return null during offline cooldown to avoid console flood
+  }
+
   const { url, key, isValid } = getSupabaseCredentials();
   if (!isValid) return null;
 
@@ -47,12 +64,14 @@ export const saveSupabaseCredentials = (url: string, key: string) => {
   localStorage.setItem('colegio_supabase_url', url.trim());
   localStorage.setItem('colegio_supabase_key', key.trim());
   clientInstance = null; // Reset instance to re-initialize
+  resetSupabaseOfflineStatus();
 };
 
 export const clearSupabaseCredentials = () => {
   localStorage.removeItem('colegio_supabase_url');
   localStorage.removeItem('colegio_supabase_key');
   clientInstance = null;
+  resetSupabaseOfflineStatus();
 };
 
 export const isSupabaseConfigured = (): boolean => {
