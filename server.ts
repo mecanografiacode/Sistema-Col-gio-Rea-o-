@@ -204,7 +204,14 @@ app.post('/api/notifications/send-email', async (req, res) => {
         })
       });
 
-      const data = await emailResponse.json();
+      const responseText = await emailResponse.text();
+      let data: any = {};
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch (e) {
+        data = { raw: responseText };
+      }
+
       if (!emailResponse.ok) {
         const errorMsg = data.message || data.error || (typeof data === 'string' ? data : JSON.stringify(data));
         throw new Error(`Resend Error (${emailResponse.status}): ${errorMsg}`);
