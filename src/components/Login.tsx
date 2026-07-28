@@ -29,10 +29,113 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess, onOpenPu
       }
 
       const emailTrimmed = email.trim().toLowerCase();
+      const supabase = getSupabaseClient();
+
+      if (supabase) {
+        // 1. Try to login via Supabase Auth first
+        try {
+          const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+            email: emailTrimmed,
+            password: password || '123456'
+          });
+
+          if (!authError && authData?.user) {
+            const u = authData.user;
+            // Fetch profile for this user
+            const { data: profileData, error: profileErr } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', u.id)
+              .maybeSingle();
+
+            let loggedInUser: UserProfile;
+
+            if (!profileErr && profileData) {
+              loggedInUser = {
+                id: profileData.id,
+                email: profileData.email,
+                full_name: profileData.full_name,
+                role: (profileData.role as UserRole) || 'operador',
+                department: profileData.department || 'Geral',
+                avatar_url: profileData.avatar_url || undefined,
+                is_active: profileData.is_active ?? true,
+                created_at: profileData.created_at,
+                password: password || '123456' // Keep locally in session
+              };
+            } else {
+              // Create profile in profiles table if it doesn't exist
+              loggedInUser = {
+                id: u.id,
+                email: emailTrimmed,
+                full_name: u.user_metadata?.full_name || emailTrimmed.split('@')[0].toUpperCase(),
+                role: (u.user_metadata?.role as UserRole) || 'operador',
+                department: u.user_metadata?.department || 'Geral',
+                is_active: true,
+                created_at: u.created_at || new Date().toISOString(),
+                password: password || '123456'
+              };
+              const payload = {
+                id: loggedInUser.id,
+                email: loggedInUser.email,
+                full_name: loggedInUser.full_name,
+                role: loggedInUser.role,
+                department: loggedInUser.department,
+                is_active: loggedInUser.is_active,
+                created_at: loggedInUser.created_at
+              };
+              await supabase.from('profiles').upsert([payload]);
+            }
+
+            if (!loggedInUser.is_active) {
+              setErrorMessage('Sua conta está desativada. Fale com o Super Admin.');
+              setIsLoading(false);
+              return;
+            }
+
+            // Sync with local memory cache
+            const cachedProfiles = storage.getItem<UserProfile>('cr_profiles');
+            const existIdx = cachedProfiles.findIndex(p => p.id === loggedInUser.id);
+            if (existIdx !== -1) {
+              cachedProfiles[existIdx] = loggedInUser;
+            } else {
+              cachedProfiles.push(loggedInUser);
+            }
+            storage.setItem('cr_profiles', cachedProfiles);
+
+            // Audit
+            await storage.logAudit(
+              loggedInUser,
+              'login',
+              'usuarios',
+              `Acesso ao Sistema: ${loggedInUser.full_name} (${loggedInUser.email})`,
+              undefined,
+              `Role: ${loggedInUser.role} (Via Supabase Auth)`
+            );
+
+            onLoginSuccess(loggedInUser);
+            setIsLoading(false);
+            return;
+          } else if (authError) {
+            console.warn('Supabase Auth error, checking fallback:', authError.message);
+            // If they are admin or user trying to sign in for the first time and we have offline/cached credentials,
+            // or if they had registered locally but auth credentials failed, continue to fallback below.
+            if (authError.message?.includes('Invalid login credentials') && profiles.some(p => p.email.toLowerCase() === emailTrimmed)) {
+              // Continue to fallback check below
+            } else if (authError.message?.includes('Email not confirmed')) {
+              setErrorMessage('Por favor, confirme seu e-mail antes de fazer login ou use as credenciais padrão se for teste.');
+              setIsLoading(false);
+              return;
+            }
+          }
+        } catch (authExc) {
+          console.warn('Supabase Auth exception, checking fallback:', authExc);
+        }
+      }
+
+      // 2. Fallback to local profile check (or offline mode)
       let targetUser = profiles.find((p) => p.email.toLowerCase() === emailTrimmed);
 
-      // If not found in local profiles state, try querying Supabase directly
-      const supabase = getSupabaseClient();
+      // Try reading directly from profiles table as query fallback
       if (!targetUser && supabase) {
         try {
           const { data: dbProfiles } = await supabase
@@ -48,40 +151,17 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess, onOpenPu
               full_name: raw.full_name || 'Usuário Sem Nome',
               role: (raw.role as UserRole) || 'operador',
               department: raw.department || 'Geral',
-              avatar_url: raw.avatar_url,
+              avatar_url: raw.avatar_url || undefined,
               is_active: raw.is_active ?? true,
               created_at: raw.created_at || new Date().toISOString(),
-              password: raw.password || '123456'
+              password: '123456' // Local fallback password
             };
-            // Sync into local profiles
-            await storage.addProfile(targetUser, null);
-          } else {
-            // Check Supabase Auth as fallback
-            try {
-              const { data: authData } = await supabase.auth.signInWithPassword({
-                email: emailTrimmed,
-                password: password || '123456'
-              });
-              if (authData?.user) {
-                const u = authData.user;
-                targetUser = {
-                  id: u.id,
-                  email: (u.email || emailTrimmed).toLowerCase(),
-                  full_name: u.user_metadata?.full_name || emailTrimmed.split('@')[0].toUpperCase(),
-                  role: (u.user_metadata?.role as UserRole) || 'operador',
-                  department: u.user_metadata?.department || 'Geral',
-                  is_active: true,
-                  created_at: u.created_at || new Date().toISOString(),
-                  password: password || '123456'
-                };
-                await storage.addProfile(targetUser, null);
-              }
-            } catch (authErr) {
-              // Ignore auth sign in error if not matching
-            }
+            const cachedProfiles = storage.getItem<UserProfile>('cr_profiles');
+            cachedProfiles.push(targetUser);
+            storage.setItem('cr_profiles', cachedProfiles);
           }
-        } catch (e) {
-          console.warn('Erro ao consultar Supabase profiles no login:', e);
+        } catch (dbErr) {
+          console.warn('Error querying fallback profiles:', dbErr);
         }
       }
 
@@ -94,24 +174,42 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess, onOpenPu
 
         const storedPassword = targetUser.password || '123456';
         if (password !== storedPassword) {
-          setErrorMessage('Senha incorreta. Verifique suas credenciais ou solicite redefinição.');
+          setErrorMessage('Senha incorreta. Verifique suas credenciais.');
           setIsLoading(false);
           return;
         }
 
-        // Write login entry to audit logs
+        // Auto signup the fallback user to Supabase Auth to enable modern auth next time
+        if (supabase) {
+          try {
+            await supabase.auth.signUp({
+              email: targetUser.email,
+              password: password || '123456',
+              options: {
+                data: {
+                  full_name: targetUser.full_name,
+                  role: targetUser.role,
+                  department: targetUser.department
+                }
+              }
+            });
+          } catch (signUpErr) {
+            // Ignore if already signed up
+          }
+        }
+
         await storage.logAudit(
           targetUser,
           'login',
           'usuarios',
           `Acesso ao Sistema: ${targetUser.full_name} (${targetUser.email})`,
           undefined,
-          `Role: ${targetUser.role}`
+          `Role: ${targetUser.role} (Fallback/Local)`
         );
 
         onLoginSuccess(targetUser);
       } else {
-        // Fallback: if database has zero users, create initial Super Admin
+        // Fallback: If database has no users, create initial Super Admin
         const allProfiles = await storage.getProfiles();
         if (allProfiles.length === 0) {
           const newProfile: UserProfile = {
@@ -135,7 +233,7 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess, onOpenPu
           );
           onLoginSuccess(newProfile);
         } else {
-          setErrorMessage('E-mail não cadastrado no sistema. Solicite o cadastro ao Super Admin na aba Usuários.');
+          setErrorMessage('E-mail não cadastrado no sistema. Solicite o cadastro ao Super Admin.');
         }
       }
     } catch (err) {

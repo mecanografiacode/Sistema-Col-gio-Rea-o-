@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS profiles (
     department TEXT NOT NULL DEFAULT 'Geral',
     avatar_url TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
-    password TEXT NOT NULL DEFAULT '123456',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -272,11 +271,11 @@ CREATE POLICY "Permitir acesso completo a time_blocks" ON time_blocks FOR ALL US
 -- ==============================================================================
 -- DADOS INICIAIS (SEED) PARA O COLEGIO REAÇÃO
 -- ==============================================================================
-INSERT INTO profiles (id, email, full_name, role, department, password, is_active)
+INSERT INTO profiles (id, email, full_name, role, department, is_active)
 VALUES 
-('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'diretor@colegioreacaodf.com', 'Dra. Maria Lúcia Reação', 'super_admin', 'Direção Geral', '123456', true),
-('b1ffcd11-8d1a-4fe9-aa7c-7cc0ce491b22', 'admin@colegioreacaodf.com', 'Carlos Eduardo (Admin)', 'admin', 'Coordenação Geral', '123456', true),
-('c2aacc22-7e2b-4fa8-bb8d-8dd1df502c33', 'operador@colegioreacaodf.com', 'Prof. Ana Paula (Operador)', 'operador', 'Secretaria Acadêmica', '123456', true)
+('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'diretor@colegioreacaodf.com', 'Dra. Maria Lúcia Reação', 'super_admin', 'Direção Geral', true),
+('b1ffcd11-8d1a-4fe9-aa7c-7cc0ce491b22', 'admin@colegioreacaodf.com', 'Carlos Eduardo (Admin)', 'admin', 'Coordenação Geral', true),
+('c2aacc22-7e2b-4fa8-bb8d-8dd1df502c33', 'operador@colegioreacaodf.com', 'Prof. Ana Paula (Operador)', 'operador', 'Secretaria Acadêmica', true)
 ON CONFLICT (email) DO NOTHING;
 
 -- DADOS INICIAIS PARA TURMAS (CLASSES) — TOTALMENTE LIMPAS CONFORME REQUERIDO

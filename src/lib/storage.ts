@@ -212,7 +212,7 @@ class StorageService {
   }
 
   // --- LOCAL STORAGE HELPERS ---
-  private getItem<T>(key: string): T[] {
+  public getItem<T>(key: string): T[] {
     try {
       const data = localStorage.getItem(key);
       return data ? JSON.parse(data) : [];
@@ -221,7 +221,7 @@ class StorageService {
     }
   }
 
-  private setItem<T>(key: string, data: T[], notify: boolean = true) {
+  public setItem<T>(key: string, data: T[], notify: boolean = true) {
     try {
       const current = localStorage.getItem(key);
       const next = JSON.stringify(data);
@@ -366,7 +366,6 @@ class StorageService {
                 department: c.department,
                 avatar_url: c.avatar_url || null,
                 is_active: c.is_active,
-                password: c.password || '123456',
                 created_at: c.created_at
               }]);
               if (res?.error && res.error.message?.includes('Failed to fetch')) {
@@ -438,7 +437,6 @@ class StorageService {
           department: newProfile.department,
           avatar_url: newProfile.avatar_url || null,
           is_active: newProfile.is_active,
-          password: newProfile.password || '123456',
           created_at: newProfile.created_at
         };
 
@@ -500,8 +498,7 @@ class StorageService {
             role: profiles[index].role,
             department: profiles[index].department,
             avatar_url: profiles[index].avatar_url || null,
-            is_active: profiles[index].is_active,
-            password: profiles[index].password || '123456'
+            is_active: profiles[index].is_active
           };
 
           const { error } = await supabase.from('profiles').upsert([payload]);
@@ -1704,7 +1701,6 @@ class StorageService {
           department: p.department || 'Geral',
           avatar_url: p.avatar_url || null,
           is_active: p.is_active,
-          password: p.password || '123456',
           created_at: p.created_at || new Date().toISOString()
         };
         const { error } = await supabase.from('profiles').upsert([payload]);
