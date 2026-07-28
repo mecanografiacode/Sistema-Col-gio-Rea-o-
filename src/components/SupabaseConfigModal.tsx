@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { saveSupabaseCredentials, clearSupabaseCredentials, isSupabaseConfigured } from '../lib/supabase';
+import { storage } from '../lib/storage';
 import { SUPABASE_SQL_SCHEMA } from '../lib/mockData';
-import { Database, Check, Copy, X, Key, Link, FileCode, RefreshCw } from 'lucide-react';
+import { Database, Check, Copy, X, Key, Link, FileCode, RefreshCw, UploadCloud, AlertTriangle } from 'lucide-react';
 
 interface SupabaseConfigModalProps {
   isOpen: boolean;
@@ -19,6 +20,8 @@ export const SupabaseConfigModal: React.FC<SupabaseConfigModalProps> = ({
   const [anonKey, setAnonKey] = useState(localStorage.getItem('colegio_supabase_key') || import.meta.env.VITE_SUPABASE_ANON_KEY || '');
   const [copiedSql, setCopiedSql] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -38,6 +41,7 @@ export const SupabaseConfigModal: React.FC<SupabaseConfigModalProps> = ({
     clearSupabaseCredentials();
     setUrl('');
     setAnonKey('');
+    setSyncStatus(null);
     onSaved();
   };
 
@@ -45,6 +49,20 @@ export const SupabaseConfigModal: React.FC<SupabaseConfigModalProps> = ({
     navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
     setCopiedSql(true);
     setTimeout(() => setCopiedSql(false), 2500);
+  };
+
+  const handleSyncLocalToSupabase = async () => {
+    setIsSyncing(true);
+    setSyncStatus(null);
+    const res = await storage.syncAllToSupabase();
+    setIsSyncing(false);
+
+    if (res.success) {
+      setSyncStatus(`✅ Sucesso! ${res.count} registros salvos no Supabase.`);
+      onSaved();
+    } else {
+      setSyncStatus(`⚠️ Erro: ${res.error}`);
+    }
   };
 
   return (
@@ -178,12 +196,50 @@ export const SupabaseConfigModal: React.FC<SupabaseConfigModalProps> = ({
                     ) : (
                       <>
                         <RefreshCw className="w-4 h-4" />
-                        <span>Salvar & Reinstanciar</span>
+                        <span>Salvar Credenciais</span>
                       </>
                     )}
                   </button>
                 </div>
               </form>
+
+              {/* Sync local data to Supabase option */}
+              <div className="mt-6 pt-4 border-t border-slate-200">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                  <div>
+                    <h5 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <UploadCloud className="w-4 h-4 text-blue-600" />
+                      <span>Sincronizar Dados do Navegador para o Supabase</span>
+                    </h5>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Envie usuários, ordens de serviço e equipamentos criados localmente diretamente para o banco de dados Supabase.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSyncLocalToSupabase}
+                    disabled={isSyncing || !isConfigured}
+                    className="px-4 py-2 bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-bold rounded-lg transition-colors shrink-0 flex items-center justify-center gap-1.5"
+                  >
+                    {isSyncing ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Sincronizando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <UploadCloud className="w-3.5 h-3.5" />
+                        <span>Enviar ao Supabase</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                {syncStatus && (
+                  <p className="text-xs font-semibold mt-2.5 px-1 text-slate-700">
+                    {syncStatus}
+                  </p>
+                )}
+              </div>
             </div>
           ) : (
             <div className="space-y-4">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile, UserRole } from '../../types';
 import { storage } from '../../lib/storage';
+import { isSupabaseConfigured } from '../../lib/supabase';
 import {
   Users,
   UserPlus,
@@ -17,7 +18,9 @@ import {
   Trash2,
   Lock,
   Eye,
-  EyeOff
+  EyeOff,
+  Database,
+  AlertCircle
 } from 'lucide-react';
 
 interface GestaoUsuariosProps {
@@ -202,6 +205,32 @@ export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) =
           </button>
         </div>
       </div>
+
+      {/* Storage Mode Notice Banner */}
+      {!isSupabaseConfigured() && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-900 shadow-xs">
+          <div className="flex items-start space-x-3">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold">Modo Armazenamento no Navegador (Local Storage) Ativo</p>
+              <p className="text-[11px] text-amber-800/90 mt-0.5 leading-relaxed">
+                Os usuários e alterações atuais estão salvos localmente neste navegador. Para salvar permanentemente na nuvem do Supabase, configure a URL e a Anon Key no botão <strong>"Supabase SQL"</strong> no topo da página.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isSupabaseConfigured() && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 flex items-center justify-between gap-3 text-emerald-900 shadow-xs">
+          <div className="flex items-center space-x-2.5">
+            <Database className="w-4 h-4 text-emerald-600 shrink-0" />
+            <p className="text-xs font-bold">
+              🟢 Conectado ao Supabase: Os usuários criados são sincronizados com o banco de dados em nuvem.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Users Cards Grid */}
       {filteredProfiles.length === 0 ? (

@@ -1440,6 +1440,168 @@ class StorageService {
       }
     }
   }
+
+  // --- FORCE SYNC LOCAL DATA TO SUPABASE ---
+  public async syncAllToSupabase(): Promise<{ success: boolean; count: number; error?: string }> {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return {
+        success: false,
+        count: 0,
+        error: 'Supabase não está configurado. Insira a URL e a Anon Key válidas primeiro.'
+      };
+    }
+
+    try {
+      let count = 0;
+
+      // 1. Profiles
+      const profiles = this.getItem<UserProfile>('cr_profiles');
+      for (const p of profiles) {
+        const payload = {
+          id: ensureValidUuid(p.id),
+          email: p.email.toLowerCase(),
+          full_name: p.full_name,
+          role: p.role,
+          department: p.department || 'Geral',
+          avatar_url: p.avatar_url || null,
+          is_active: p.is_active,
+          password: p.password || '123456',
+          created_at: p.created_at || new Date().toISOString()
+        };
+        const { error } = await supabase.from('profiles').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 2. Equipments
+      const equipments = this.getItem<Equipment>('cr_equipment');
+      for (const eq of equipments) {
+        const payload = {
+          id: ensureValidUuid(eq.id),
+          name: eq.name,
+          type: eq.type,
+          asset_number: eq.asset_number,
+          room_location: eq.room_location,
+          acquisition_date: eq.acquisition_date || new Date().toISOString().split('T')[0],
+          warranty_until: eq.warranty_until || null,
+          status: eq.status,
+          notes: eq.notes || null,
+          foto_url: eq.foto_url || null,
+          created_at: eq.created_at || new Date().toISOString()
+        };
+        const { error } = await supabase.from('equipments').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 3. Service Orders
+      const serviceOrders = this.getItem<ServiceOrder>('cr_service_orders');
+      for (const so of serviceOrders) {
+        const payload = {
+          id: ensureValidUuid(so.id),
+          title: so.title,
+          description: so.description,
+          category: so.category,
+          priority: so.priority,
+          status: so.status,
+          sector: so.sector,
+          location: so.location || null,
+          observation: so.observation || null,
+          equipment_id: toValidUuidOrNull(so.equipment_id),
+          equipment_name: so.equipment_name || null,
+          assigned_to: toValidUuidOrNull(so.assigned_to),
+          assigned_to_name: so.assigned_to_name || null,
+          created_by: toValidUuidOrNull(so.created_by),
+          created_by_name: so.created_by_name || 'Sistema',
+          photo_url: so.photo_url || null,
+          foto_abertura_url: so.foto_abertura_url || null,
+          foto_conclusao_url: so.foto_conclusao_url || null,
+          concluded_at: so.concluded_at || null,
+          concluded_notes: so.concluded_notes || null,
+          comments: so.comments || [],
+          created_at: so.created_at || new Date().toISOString(),
+          updated_at: so.updated_at || new Date().toISOString()
+        };
+        const { error } = await supabase.from('service_orders').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 4. Material Requests
+      const materialReqs = this.getItem<MaterialRequest>('cr_material_requests');
+      for (const mr of materialReqs) {
+        const payload = {
+          id: ensureValidUuid(mr.id),
+          title: mr.title,
+          requested_by: toValidUuidOrNull(mr.requested_by),
+          requested_by_name: mr.requested_by_name || 'Solicitante',
+          sector: mr.sector,
+          urgency: mr.urgency,
+          justification: mr.justification,
+          items: mr.items || [],
+          status: mr.status,
+          reviewed_by: toValidUuidOrNull(mr.reviewed_by),
+          reviewed_by_name: mr.reviewed_by_name || null,
+          review_notes: mr.review_notes || null,
+          created_at: mr.created_at || new Date().toISOString()
+        };
+        const { error } = await supabase.from('material_requests').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 5. Marketing
+      const mktContents = this.getItem<MarketingContent>('cr_marketing');
+      for (const mc of mktContents) {
+        const payload = {
+          id: ensureValidUuid(mc.id),
+          title: mc.title,
+          content_type: mc.content_type,
+          scheduled_date: mc.scheduled_date,
+          status: mc.status,
+          has_image_authorization: mc.has_image_authorization,
+          assigned_to_name: mc.assigned_to_name || null,
+          attachment_url: mc.attachment_url || null,
+          notes: mc.notes || null,
+          created_at: mc.created_at || new Date().toISOString()
+        };
+        const { error } = await supabase.from('marketing_contents').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 6. Tech Tickets
+      const tickets = this.getItem<TechTicket>('cr_tech_tickets');
+      for (const t of tickets) {
+        const payload = {
+          id: ensureValidUuid(t.id),
+          title: t.title,
+          description: t.description,
+          category: t.category,
+          priority: t.priority,
+          status: t.status,
+          requester_id: toValidUuidOrNull(t.requester_id),
+          requester_name: t.requester_name || 'Solicitante',
+          sector: t.sector,
+          assigned_to: toValidUuidOrNull(t.assigned_to),
+          assigned_to_name: t.assigned_to_name || null,
+          attachment_url: t.attachment_url || null,
+          resolution_notes: t.resolution_notes || null,
+          created_at: t.created_at || new Date().toISOString(),
+          updated_at: t.updated_at || new Date().toISOString()
+        };
+        const { error } = await supabase.from('tech_tickets').upsert([payload]);
+        if (!error) count++;
+      }
+
+      resetSupabaseOfflineStatus();
+      this.notify();
+      return { success: true, count };
+    } catch (err: any) {
+      console.error('Erro na sincronização completa:', err);
+      return {
+        success: false,
+        count: 0,
+        error: err?.message || 'Erro ao sincronizar dados com Supabase.'
+      };
+    }
+  }
 }
 
 export const storage = new StorageService();
