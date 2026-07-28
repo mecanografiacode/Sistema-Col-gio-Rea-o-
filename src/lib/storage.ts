@@ -306,6 +306,7 @@ class StorageService {
       full_name: profile.full_name || 'Usuário Sem Nome',
       role: profile.role || 'operador',
       department: profile.department || 'Geral',
+      password: profile.password || '123456',
       is_active: profile.is_active ?? true,
       created_at: new Date().toISOString()
     };
@@ -334,6 +335,60 @@ class StorageService {
 
     await this.logAudit(actor, 'criacao', 'usuarios', `Novo Usuário: ${newProfile.full_name}`, undefined, `Role: ${newProfile.role}`);
     return newProfile;
+  }
+
+  public async updateProfile(userId: string, updatedFields: Partial<UserProfile>, actor: UserProfile | null) {
+    const profiles = this.getItem<UserProfile>('cr_profiles');
+    const index = profiles.findIndex((p) => p.id === userId);
+    if (index !== -1) {
+      const oldProfile = { ...profiles[index] };
+      profiles[index] = { ...profiles[index], ...updatedFields };
+      this.setItem('cr_profiles', profiles);
+
+      const supabase = getSupabaseClient();
+      if (supabase && isUUID(userId)) {
+        try {
+          await supabase.from('profiles').update({
+            email: profiles[index].email,
+            full_name: profiles[index].full_name,
+            role: profiles[index].role,
+            department: profiles[index].department,
+            is_active: profiles[index].is_active
+          }).eq('id', userId);
+        } catch (e) {
+          console.warn('Supabase profile update error:', e);
+        }
+      }
+
+      await this.logAudit(
+        actor,
+        'edicao',
+        'usuarios',
+        `Edição do Usuário: ${profiles[index].full_name} (${profiles[index].email})`,
+        `Anterior: ${oldProfile.full_name} (${oldProfile.role})`,
+        `Novo: ${profiles[index].full_name} (${profiles[index].role})`
+      );
+    }
+  }
+
+  public async deleteProfile(userId: string, actor: UserProfile | null) {
+    const profiles = this.getItem<UserProfile>('cr_profiles');
+    const target = profiles.find((p) => p.id === userId);
+    if (target) {
+      const filtered = profiles.filter((p) => p.id !== userId);
+      this.setItem('cr_profiles', filtered);
+
+      const supabase = getSupabaseClient();
+      if (supabase && isUUID(userId)) {
+        try {
+          await supabase.from('profiles').delete().eq('id', userId);
+        } catch (e) {
+          console.warn('Supabase profile delete error:', e);
+        }
+      }
+
+      await this.logAudit(actor, 'exclusao', 'usuarios', `Usuário Removido: ${target.full_name} (${target.email})`, undefined, undefined);
+    }
   }
 
   public async updateProfileRole(userId: string, newRole: UserRole, actor: UserProfile | null) {

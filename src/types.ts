@@ -9,6 +9,7 @@ export interface UserProfile {
   avatar_url?: string;
   is_active: boolean;
   created_at: string;
+  password?: string;
 }
 
 export type OSStatus = 'aberta' | 'em_andamento' | 'aguardando_peca' | 'concluida' | 'cancelada';

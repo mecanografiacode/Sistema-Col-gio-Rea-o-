@@ -16,40 +16,47 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess }) => {
     e.preventDefault();
     setErrorMessage('');
 
-    if (!email) {
+    if (!email.trim()) {
       setErrorMessage('Por favor, digite seu e-mail corporativo.');
       return;
     }
 
-    const found = profiles.find((p) => p.email.toLowerCase() === email.trim().toLowerCase());
+    const emailTrimmed = email.trim().toLowerCase();
+    const found = profiles.find((p) => p.email.toLowerCase() === emailTrimmed);
+
     if (found) {
+      if (!found.is_active) {
+        setErrorMessage('Sua conta está desativada. Fale com o Super Admin.');
+        return;
+      }
+
+      // Check password if set or fallback to default
+      const storedPassword = found.password || '123456';
+      if (password !== storedPassword) {
+        setErrorMessage('Senha incorreta. Verifique suas credenciais ou solicite redefinição.');
+        return;
+      }
+
       onLoginSuccess(found);
     } else {
-      // Auto-assign role for new login: super_admin if first user or admin email
-      const emailLower = email.toLowerCase();
-      const isFirstUser = profiles.length === 0;
-      const isAdminEmail = emailLower.includes('direcao') || emailLower.includes('admin') || emailLower.includes('mecanografia');
-
-      const newProfile: UserProfile = {
-        id: `user-${Date.now()}`,
-        email: email.trim(),
-        full_name: email.split('@')[0].replace(/[._]/g, ' ').toUpperCase(),
-        role: isFirstUser || isAdminEmail ? 'super_admin' : 'operador',
-        department: isFirstUser || isAdminEmail ? 'Direção Geral' : 'Setor Operacional',
-        is_active: true,
-        created_at: new Date().toISOString()
-      };
-      onLoginSuccess(newProfile);
+      // First boot fallback: if database has zero users, register as initial Super Admin
+      if (profiles.length === 0) {
+        const newProfile: UserProfile = {
+          id: `user-${Date.now()}`,
+          email: email.trim(),
+          full_name: email.split('@')[0].replace(/[._]/g, ' ').toUpperCase(),
+          role: 'super_admin',
+          department: 'Direção Geral',
+          is_active: true,
+          password: password || '123456',
+          created_at: new Date().toISOString()
+        };
+        onLoginSuccess(newProfile);
+      } else {
+        setErrorMessage('E-mail não cadastrado no sistema. Solicite o cadastro ao Super Admin na aba Usuários.');
+      }
     }
   };
-
-  const handleQuickRoleLogin = (user: UserProfile) => {
-    onLoginSuccess(user);
-  };
-
-  const superAdminUser = profiles.find((p) => p.role === 'super_admin');
-  const adminUser = profiles.find((p) => p.role === 'admin');
-  const operatorUsers = profiles.filter((p) => p.role === 'operador');
 
   return (
     <div className="min-h-screen bg-[#F5F5F5] flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-['Plus_Jakarta_Sans',sans-serif]">
@@ -82,6 +89,7 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess }) => {
                 </div>
                 <input
                   type="email"
+                  required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="seu.nome@colegioreacaodf.com"
@@ -100,6 +108,7 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess }) => {
                 </div>
                 <input
                   type="password"
+                  required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
@@ -109,7 +118,7 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess }) => {
             </div>
 
             {errorMessage && (
-              <p className="text-xs font-medium text-red-600 bg-red-50 p-2 rounded-md">
+              <p className="text-xs font-medium text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">
                 {errorMessage}
               </p>
             )}
@@ -123,90 +132,10 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess }) => {
             </button>
           </form>
 
-          <div className="mt-8 pt-6 border-t border-slate-200">
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider text-center mb-3">
-              Modo Demonstrativo — Acesso Rápido por Nível
+          <div className="mt-6 pt-5 border-t border-slate-200 text-center">
+            <p className="text-xs text-slate-500">
+              🔒 <strong className="text-slate-700">Acesso Restrito:</strong> Os usuários devem ser cadastrados previamente pelo Super Admin na aba <strong>Usuários</strong> do sistema.
             </p>
-
-            <div className="space-y-2.5">
-              {/* Super Admin */}
-              {superAdminUser && (
-                <button
-                  onClick={() => handleQuickRoleLogin(superAdminUser)}
-                  className="w-full text-left p-3 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100/80 transition-colors flex items-center justify-between group"
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-red-600 text-white rounded-lg">
-                      <ShieldAlert className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-xs font-bold text-red-900">
-                          {superAdminUser.full_name}
-                        </span>
-                        <span className="text-[10px] bg-red-200 text-red-900 font-bold px-1.5 py-0.5 rounded-full">
-                          Super Admin
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-red-700">Acesso Total + Auditoria + Usuários</p>
-                    </div>
-                  </div>
-                  <ArrowRight className="w-4 h-4 text-red-600 group-hover:translate-x-1 transition-transform" />
-                </button>
-              )}
-
-              {/* Admin */}
-              {adminUser && (
-                <button
-                  onClick={() => handleQuickRoleLogin(adminUser)}
-                  className="w-full text-left p-3 rounded-xl border border-blue-200 bg-blue-50 hover:bg-blue-100/80 transition-colors flex items-center justify-between group"
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-blue-600 text-white rounded-lg">
-                      <UserCheck className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-xs font-bold text-blue-900">
-                          {adminUser.full_name}
-                        </span>
-                        <span className="text-[10px] bg-blue-200 text-blue-900 font-bold px-1.5 py-0.5 rounded-full">
-                          Admin
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-blue-700">Aprovações + Relatórios + Operações</p>
-                    </div>
-                  </div>
-                  <ArrowRight className="w-4 h-4 text-blue-600 group-hover:translate-x-1 transition-transform" />
-                </button>
-              )}
-
-              {/* Operador */}
-              {operatorUsers.length > 0 && (
-                <button
-                  onClick={() => handleQuickRoleLogin(operatorUsers[0])}
-                  className="w-full text-left p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors flex items-center justify-between group"
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-slate-600 text-white rounded-lg">
-                      <User className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-xs font-bold text-slate-900">
-                          {operatorUsers[0].full_name}
-                        </span>
-                        <span className="text-[10px] bg-slate-200 text-slate-800 font-bold px-1.5 py-0.5 rounded-full">
-                          Operador
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-600">Abertura de Chamados e Requisições</p>
-                    </div>
-                  </div>
-                  <ArrowRight className="w-4 h-4 text-slate-600 group-hover:translate-x-1 transition-transform" />
-                </button>
-              )}
-            </div>
           </div>
         </div>
 
