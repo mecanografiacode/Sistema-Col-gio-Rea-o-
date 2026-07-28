@@ -40,6 +40,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
   const isSuperAdmin = userRole === 'super_admin';
   const isAdmin = userRole === 'admin' || isSuperAdmin;
+  const isOperador = userRole === 'operador';
 
   const navItems = [
     {
@@ -56,7 +57,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       shortLabel: 'Patrimônio',
       description: 'Inventário com fotos, status, QR Code e controle de empréstimos.',
       icon: Monitor,
-      visible: true
+      visible: !isOperador
     },
     {
       id: 'materiais' as NavTab,
@@ -72,7 +73,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       shortLabel: 'Marketing',
       description: 'Cronograma de publicações, carrosséis, stories e métricas sociais.',
       icon: Megaphone,
-      visible: true
+      visible: !isOperador
     },
     {
       id: 'suporte_tecnico' as NavTab,
@@ -96,7 +97,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       shortLabel: 'Equipe',
       description: 'Controle de acesso, perfis e permissões da equipe escolar.',
       icon: Users,
-      visible: true
+      visible: !isOperador
     },
     {
       id: 'notificacoes' as NavTab,

@@ -18,6 +18,16 @@ interface AuditoriaProps {
 }
 
 export const Auditoria: React.FC<AuditoriaProps> = ({ currentUser }) => {
+  if (currentUser.role === 'operador') {
+    return (
+      <div className="bg-white rounded-2xl p-8 text-center border border-slate-200 shadow-xs my-6">
+        <SearchCheck className="w-12 h-12 text-red-600 mx-auto mb-3" />
+        <h3 className="text-lg font-bold text-slate-800">Acesso Restrito</h3>
+        <p className="text-xs text-slate-500 mt-1">O perfil de Operador não possui acesso aos Logs de Auditoria.</p>
+      </div>
+    );
+  }
+
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedModule, setSelectedModule] = useState<string>('todos');

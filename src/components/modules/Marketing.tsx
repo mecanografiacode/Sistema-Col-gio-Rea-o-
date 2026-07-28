@@ -52,6 +52,16 @@ interface AiIdeaResponse {
 }
 
 export const Marketing: React.FC<MarketingProps> = ({ currentUser }) => {
+  if (currentUser.role === 'operador') {
+    return (
+      <div className="bg-white rounded-2xl p-8 text-center border border-slate-200 shadow-xs my-6">
+        <Megaphone className="w-12 h-12 text-red-600 mx-auto mb-3" />
+        <h3 className="text-lg font-bold text-slate-800">Acesso Restrito</h3>
+        <p className="text-xs text-slate-500 mt-1">O perfil de Operador não possui acesso ao módulo de Marketing & Mídia.</p>
+      </div>
+    );
+  }
+
   const [contents, setContents] = useState<MarketingContent[]>([]);
   const [metrics, setMetrics] = useState<MarketingMetric[]>([]);
   const [activeTab, setActiveTab] = useState<'calendar' | 'kanban' | 'ai_generator' | 'plan' | 'metrics'>('calendar');

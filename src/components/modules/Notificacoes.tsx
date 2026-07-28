@@ -24,7 +24,7 @@ export const Notificacoes: React.FC<NotificacoesProps> = ({ currentUser, onNavig
   );
 
   const loadData = async () => {
-    const list = await storage.getNotifications(currentUser.id);
+    const list = await storage.getNotifications(currentUser.id, currentUser.role);
     setNotifications(list);
   };
 
@@ -34,7 +34,7 @@ export const Notificacoes: React.FC<NotificacoesProps> = ({ currentUser, onNavig
       loadData();
     });
     return () => unsubscribe();
-  }, [currentUser.id]);
+  }, [currentUser.id, currentUser.role]);
 
   const handleEnableWebPush = async () => {
     const status = await requestNotificationPermission();
@@ -44,7 +44,11 @@ export const Notificacoes: React.FC<NotificacoesProps> = ({ currentUser, onNavig
   const handleMarkAsRead = async (id: string, module: any) => {
     await storage.markNotificationRead(id);
     if (module) {
-      onNavigateTab(module);
+      if (currentUser.role === 'operador' && !['ordens_servico', 'materiais', 'suporte_tecnico', 'notificacoes'].includes(module)) {
+        onNavigateTab('materiais');
+      } else {
+        onNavigateTab(module);
+      }
     }
   };
 
@@ -58,7 +62,9 @@ export const Notificacoes: React.FC<NotificacoesProps> = ({ currentUser, onNavig
             <h2 className="text-2xl font-serif-editorial font-bold text-gray-900">Central de Notificações</h2>
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Avisos de novas OS, chamados respondidos, aprovações de materiais e tarefas
+            {currentUser.role === 'operador'
+              ? 'Notificações e avisos referentes exclusivamente às requisições de materiais'
+              : 'Avisos de novas OS, chamados respondidos, aprovações de materiais e tarefas'}
           </p>
         </div>
 

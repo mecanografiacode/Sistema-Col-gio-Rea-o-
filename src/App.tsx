@@ -50,10 +50,19 @@ export default function App() {
     setProfiles(profs);
 
     if (currentUser) {
-      const notifs = await storage.getNotifications(currentUser.id);
+      const notifs = await storage.getNotifications(currentUser.id, currentUser.role);
       setUnreadCount(notifs.filter((n) => !n.is_read).length);
     }
   };
+
+  useEffect(() => {
+    if (currentUser?.role === 'operador') {
+      const allowedTabs: NavTab[] = ['ordens_servico', 'materiais', 'suporte_tecnico', 'notificacoes'];
+      if (!allowedTabs.includes(activeTab)) {
+        setActiveTab('ordens_servico');
+      }
+    }
+  }, [currentUser?.role, activeTab]);
 
   useEffect(() => {
     loadData();
@@ -61,7 +70,7 @@ export default function App() {
       loadData();
     });
     return () => unsubscribe();
-  }, [currentUser?.id]);
+  }, [currentUser?.id, currentUser?.role]);
 
   // Register PWA Service Worker & capture Install Prompt
   useEffect(() => {

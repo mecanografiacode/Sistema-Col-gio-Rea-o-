@@ -1470,9 +1470,13 @@ class StorageService {
   }
 
   // --- NOTIFICATIONS ---
-  public async getNotifications(userId: string): Promise<AppNotification[]> {
+  public async getNotifications(userId: string, userRole?: UserRole): Promise<AppNotification[]> {
     const items = this.getItem<AppNotification>('cr_notifications');
-    return items.filter((n) => n.user_id === userId || n.user_id === 'all');
+    let userNotifs = items.filter((n) => n.user_id === userId || n.user_id === 'all');
+    if (userRole === 'operador') {
+      userNotifs = userNotifs.filter((n) => n.module === 'materiais');
+    }
+    return userNotifs;
   }
 
   public async addNotification(notif: AppNotification) {

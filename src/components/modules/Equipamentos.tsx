@@ -34,6 +34,16 @@ interface EquipamentosProps {
 }
 
 export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
+  if (currentUser.role === 'operador') {
+    return (
+      <div className="bg-white rounded-2xl p-8 text-center border border-slate-200 shadow-xs my-6">
+        <ShieldAlert className="w-12 h-12 text-red-600 mx-auto mb-3" />
+        <h3 className="text-lg font-bold text-slate-800">Acesso Restrito</h3>
+        <p className="text-xs text-slate-500 mt-1">O perfil de Operador não possui acesso ao módulo de Equipamentos.</p>
+      </div>
+    );
+  }
+
   const [equipmentList, setEquipmentList] = useState<Equipment[]>([]);
   const [serviceOrders, setServiceOrders] = useState<ServiceOrder[]>([]);
   const [allLoans, setAllLoans] = useState<EquipmentLoan[]>([]);
