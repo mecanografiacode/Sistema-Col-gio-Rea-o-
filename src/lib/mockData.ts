@@ -456,20 +456,20 @@ CREATE TABLE IF NOT EXISTS public.push_subscriptions (
 -- 13. Tabela de Professores (teachers) - Editor de Horários
 CREATE TABLE IF NOT EXISTS public.teachers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
+  name TEXT DEFAULT 'Professor',
   subjects TEXT[] DEFAULT '{}',
   groups TEXT[] DEFAULT '{}',
   workload_hours INT DEFAULT 0,
   available_days TEXT[] DEFAULT '{}',
-  availability_shift TEXT NOT NULL DEFAULT 'ambos' CHECK (availability_shift IN ('matutino', 'vespertino', 'ambos')),
+  availability_shift TEXT DEFAULT 'ambos' CHECK (availability_shift IN ('matutino', 'vespertino', 'ambos')),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 14. Tabela de Turmas (classes) - Editor de Horários
 CREATE TABLE IF NOT EXISTS public.classes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  "group" TEXT NOT NULL CHECK ("group" IN ('infantil', 'anos_iniciais', 'anos_finais', 'ensino_medio')),
+  name TEXT DEFAULT 'Turma',
+  "group" TEXT DEFAULT 'anos_iniciais' CHECK ("group" IN ('infantil', 'anos_iniciais', 'anos_finais', 'ensino_medio')),
   subject_workloads JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -479,18 +479,18 @@ CREATE TABLE IF NOT EXISTS public.schedule_slots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   class_id UUID REFERENCES public.classes(id) ON DELETE CASCADE,
   teacher_id UUID REFERENCES public.teachers(id) ON DELETE SET NULL,
-  subject TEXT NOT NULL,
-  day_of_week TEXT NOT NULL CHECK (day_of_week IN ('segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado')),
-  start_time TEXT NOT NULL,
-  end_time TEXT NOT NULL
+  subject TEXT DEFAULT 'Aula',
+  day_of_week TEXT DEFAULT 'segunda' CHECK (day_of_week IN ('segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado')),
+  start_time TEXT DEFAULT '07:20',
+  end_time TEXT DEFAULT '08:10'
 );
 
 -- 16. Tabela de Blocos de Horário (time_blocks) - Editor de Horários
 CREATE TABLE IF NOT EXISTS public.time_blocks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   class_id UUID REFERENCES public.classes(id) ON DELETE CASCADE,
-  start_time TEXT NOT NULL,
-  end_time TEXT NOT NULL,
+  start_time TEXT DEFAULT '07:20',
+  end_time TEXT DEFAULT '08:10',
   is_interval BOOLEAN DEFAULT false
 );
 
@@ -572,23 +572,7 @@ VALUES
 ('c2aacc22-7e2b-4fa8-bb8d-8dd1df502c33', 'operador@colegioreacaodf.com', 'Prof. Ana Paula (Operador)', 'operador', 'Secretaria Acadêmica', '123456', true)
 ON CONFLICT (email) DO NOTHING;
 
--- DADOS INICIAIS PARA TURMAS (CLASSES) COM CARGA HORÁRIA TOTALMENTE LIMPA (VAZIA)
-INSERT INTO public.classes (id, name, "group", subject_workloads) VALUES
-('a1a1a1a1-1111-1111-1111-111111111111', 'INFANTIL III', 'infantil', '{}'::jsonb),
-('a2a2a2a2-2222-2222-2222-222222222222', 'INFANTIL IV', 'infantil', '{}'::jsonb),
-('a3a3a3a3-3333-3333-3333-333333333333', 'INFANTIL V', 'infantil', '{}'::jsonb),
-('b1b1b1b1-1111-1111-1111-111111111111', '1º ANO A', 'anos_iniciais', '{}'::jsonb),
-('b2b2b2b2-2222-2222-2222-222222222222', '1º ANO B', 'anos_iniciais', '{}'::jsonb),
-('b3b3b3b3-3333-3333-3333-333333333333', '2º ANO A', 'anos_iniciais', '{}'::jsonb),
-('b4b4b4b4-4444-4444-4444-444444444444', '2º ANO B', 'anos_iniciais', '{}'::jsonb),
-('b5b5b5b5-5555-5555-5555-555555555555', '3º ANO A', 'anos_iniciais', '{}'::jsonb),
-('b6b6b6b6-6666-6666-6666-666666666666', '3º ANO B', 'anos_iniciais', '{}'::jsonb),
-('c1c1c1c1-1111-1111-1111-111111111111', '6º ANO A', 'anos_finais', '{}'::jsonb),
-('c2c2c2c2-2222-2222-2222-222222222222', '6º ANO B', 'anos_finais', '{}'::jsonb),
-('c3c3c3c3-3333-3333-3333-333333333333', '7º ANO A', 'anos_finais', '{}'::jsonb),
-('c4c4c4c4-4444-4444-4444-444444444444', '7º ANO B', 'anos_finais', '{}'::jsonb),
-('d1d1d1d1-1111-1111-1111-111111111111', '1ª SÉRIE A', 'ensino_medio', '{}'::jsonb),
-('d2d2d2d2-2222-2222-2222-222222222222', '1ª SÉRIE B', 'ensino_medio', '{}'::jsonb)
-ON CONFLICT (id) DO NOTHING;
+-- DADOS INICIAIS PARA TURMAS (CLASSES) — TOTALMENTE LIMPAS CONFORME REQUERIDO
+-- (As turmas devem ser cadastradas manualmente pelo administrador no sistema para evitar erros de integridade)
 `;
 

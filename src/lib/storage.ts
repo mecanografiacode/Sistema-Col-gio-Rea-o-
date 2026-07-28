@@ -108,6 +108,18 @@ class StorageService {
     if (!localStorage.getItem('cr_notifications')) {
       localStorage.setItem('cr_notifications', JSON.stringify(INITIAL_NOTIFICATIONS));
     }
+    if (!localStorage.getItem('cr_teachers')) {
+      localStorage.setItem('cr_teachers', JSON.stringify([]));
+    }
+    if (!localStorage.getItem('cr_classes')) {
+      localStorage.setItem('cr_classes', JSON.stringify([]));
+    }
+    if (!localStorage.getItem('cr_schedule_slots')) {
+      localStorage.setItem('cr_schedule_slots', JSON.stringify([]));
+    }
+    if (!localStorage.getItem('cr_time_blocks')) {
+      localStorage.setItem('cr_time_blocks', JSON.stringify([]));
+    }
   }
 
   public subscribe(listener: () => void) {
@@ -238,6 +250,8 @@ class StorageService {
     if ('responsible_id' in cleaned) cleaned.responsible_id = toValidUuidOrNull(cleaned.responsible_id);
     if ('requester_id' in cleaned) cleaned.requester_id = toValidUuidOrNull(cleaned.requester_id);
     if ('funcionario_id' in cleaned) cleaned.funcionario_id = toValidUuidOrNull(cleaned.funcionario_id);
+    if ('class_id' in cleaned) cleaned.class_id = toValidUuidOrNull(cleaned.class_id);
+    if ('teacher_id' in cleaned) cleaned.teacher_id = toValidUuidOrNull(cleaned.teacher_id);
 
     // Fallbacks for non-null requirements
     if ('title' in cleaned && (cleaned.title === undefined || cleaned.title === null)) cleaned.title = 'Item';
@@ -1520,6 +1534,151 @@ class StorageService {
     }
   }
 
+  // --- TEACHERS (PROFESSORES) ---
+  public async getTeachers(): Promise<any[]> {
+    return this.fetchFromSupabaseOrCache<any>('teachers', 'cr_teachers', [], 'name', true);
+  }
+
+  public async saveTeachers(teachers: any[]): Promise<void> {
+    this.setItem('cr_teachers', teachers);
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        for (const t of teachers) {
+          const payload = {
+            id: ensureValidUuid(t.id),
+            name: t.name || 'Professor',
+            subjects: t.subjects || [],
+            groups: t.groups || [],
+            workload_hours: t.workload_hours || 0,
+            available_days: t.available_days || [],
+            availability_shift: t.availability_shift || 'ambos',
+            created_at: t.created_at || new Date().toISOString()
+          };
+          await supabase.from('teachers').upsert([payload]);
+        }
+      } catch (err) {
+        console.warn('Erro ao salvar professores no Supabase:', err);
+      }
+    }
+  }
+
+  public async deleteTeacher(id: string): Promise<void> {
+    const items = this.getItem<any>('cr_teachers').filter(t => t.id !== id);
+    this.setItem('cr_teachers', items);
+    const supabase = getSupabaseClient();
+    if (supabase && isUUID(id)) {
+      await supabase.from('teachers').delete().eq('id', id);
+    }
+  }
+
+  // --- CLASSES (TURMAS) ---
+  public async getClasses(): Promise<any[]> {
+    return this.fetchFromSupabaseOrCache<any>('classes', 'cr_classes', [], 'name', true);
+  }
+
+  public async saveClasses(classes: any[]): Promise<void> {
+    this.setItem('cr_classes', classes);
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        for (const c of classes) {
+          const payload = {
+            id: ensureValidUuid(c.id),
+            name: c.name || 'Turma',
+            "group": c.group || 'anos_iniciais',
+            subject_workloads: c.subject_workloads || {},
+            created_at: c.created_at || new Date().toISOString()
+          };
+          await supabase.from('classes').upsert([payload]);
+        }
+      } catch (err) {
+        console.warn('Erro ao salvar turmas no Supabase:', err);
+      }
+    }
+  }
+
+  public async deleteClass(id: string): Promise<void> {
+    const items = this.getItem<any>('cr_classes').filter(c => c.id !== id);
+    this.setItem('cr_classes', items);
+    const supabase = getSupabaseClient();
+    if (supabase && isUUID(id)) {
+      await supabase.from('classes').delete().eq('id', id);
+    }
+  }
+
+  // --- SCHEDULE SLOTS ---
+  public async getScheduleSlots(): Promise<any[]> {
+    return this.fetchFromSupabaseOrCache<any>('schedule_slots', 'cr_schedule_slots', [], 'day_of_week', true);
+  }
+
+  public async saveScheduleSlots(slots: any[]): Promise<void> {
+    this.setItem('cr_schedule_slots', slots);
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        // Delete slots that are no longer in the list (if we have any IDs)
+        const ids = slots.map(s => ensureValidUuid(s.id));
+        if (ids.length > 0) {
+          const idsString = ids.map(id => `'${id}'`).join(',');
+          await supabase.from('schedule_slots').delete().filter('id', 'not.in', `(${idsString})`);
+        } else {
+          await supabase.from('schedule_slots').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        }
+        // Upsert current slots
+        for (const s of slots) {
+          const payload = {
+            id: ensureValidUuid(s.id),
+            class_id: toValidUuidOrNull(s.class_id),
+            teacher_id: toValidUuidOrNull(s.teacher_id),
+            subject: s.subject || 'Aula',
+            day_of_week: s.day_of_week || 'segunda',
+            start_time: s.start_time || '07:20',
+            end_time: s.end_time || '08:10'
+          };
+          await supabase.from('schedule_slots').upsert([payload]);
+        }
+      } catch (err) {
+        console.warn('Erro ao salvar slots de horários no Supabase:', err);
+      }
+    }
+  }
+
+  // --- TIME BLOCKS ---
+  public async getTimeBlocks(): Promise<any[]> {
+    return this.fetchFromSupabaseOrCache<any>('time_blocks', 'cr_time_blocks', [], 'start_time', true);
+  }
+
+  public async saveTimeBlocks(blocks: any[]): Promise<void> {
+    this.setItem('cr_time_blocks', blocks);
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        // Delete blocks that are no longer in the list
+        const ids = blocks.map(b => ensureValidUuid(b.id));
+        if (ids.length > 0) {
+          const idsString = ids.map(id => `'${id}'`).join(',');
+          await supabase.from('time_blocks').delete().filter('id', 'not.in', `(${idsString})`);
+        } else {
+          await supabase.from('time_blocks').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        }
+        // Upsert current blocks
+        for (const tb of blocks) {
+          const payload = {
+            id: ensureValidUuid(tb.id),
+            class_id: toValidUuidOrNull(tb.class_id),
+            start_time: tb.start_time || '07:20',
+            end_time: tb.end_time || '08:10',
+            is_interval: tb.is_interval || false
+          };
+          await supabase.from('time_blocks').upsert([payload]);
+        }
+      } catch (err) {
+        console.warn('Erro ao salvar blocos de horários no Supabase:', err);
+      }
+    }
+  }
+
   // --- FORCE SYNC LOCAL DATA TO SUPABASE ---
   public async syncAllToSupabase(): Promise<{ success: boolean; count: number; error?: string }> {
     const supabase = getSupabaseClient();
@@ -1686,6 +1845,67 @@ class StorageService {
           created_at: al.created_at || new Date().toISOString()
         };
         const { error } = await supabase.from('audit_logs').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 8. Teachers
+      const teachers = this.getItem<any>('cr_teachers');
+      for (const t of teachers) {
+        const payload = {
+          id: ensureValidUuid(t.id),
+          name: t.name || 'Professor',
+          subjects: t.subjects || [],
+          groups: t.groups || [],
+          workload_hours: t.workload_hours || 0,
+          available_days: t.available_days || [],
+          availability_shift: t.availability_shift || 'ambos',
+          created_at: t.created_at || new Date().toISOString()
+        };
+        const { error } = await supabase.from('teachers').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 9. Classes
+      const classes = this.getItem<any>('cr_classes');
+      for (const c of classes) {
+        const payload = {
+          id: ensureValidUuid(c.id),
+          name: c.name || 'Turma',
+          "group": c.group || 'anos_iniciais',
+          subject_workloads: c.subject_workloads || {},
+          created_at: c.created_at || new Date().toISOString()
+        };
+        const { error } = await supabase.from('classes').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 10. Schedule Slots
+      const slots = this.getItem<any>('cr_schedule_slots');
+      for (const s of slots) {
+        const payload = {
+          id: ensureValidUuid(s.id),
+          class_id: toValidUuidOrNull(s.class_id),
+          teacher_id: toValidUuidOrNull(s.teacher_id),
+          subject: s.subject || 'Aula',
+          day_of_week: s.day_of_week || 'segunda',
+          start_time: s.start_time || '07:20',
+          end_time: s.end_time || '08:10'
+        };
+        const { error } = await supabase.from('schedule_slots').upsert([payload]);
+        if (!error) count++;
+      }
+
+      // 11. Time Blocks
+      const blocks = this.getItem<any>('cr_time_blocks');
+      for (const tb of blocks) {
+        const payload = {
+          id: ensureValidUuid(tb.id),
+          class_id: toValidUuidOrNull(tb.class_id),
+          start_time: tb.start_time || '07:20',
+          end_time: tb.end_time || '08:10',
+          is_interval: tb.is_interval || false
+        };
+        const { error } = await supabase.from('time_blocks').upsert([payload]);
         if (!error) count++;
       }
 

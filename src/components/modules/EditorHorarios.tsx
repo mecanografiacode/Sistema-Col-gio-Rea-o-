@@ -3,6 +3,7 @@ import { UserProfile, Teacher, SchoolClass, ScheduleSlot, EducationalGroup, DayO
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Plus, Trash2, Edit2, AlertCircle, Save, Download, CalendarClock, Wand2 } from 'lucide-react';
+import { storage } from '../../lib/storage';
 
 const DEFAULT_INFANTIL_WORKLOAD = {};
 
@@ -12,39 +13,7 @@ const DEFAULT_FINAIS_WORKLOAD = {};
 
 const DEFAULT_MEDIO_WORKLOAD = {};
 
-const DEFAULT_CLASSES: SchoolClass[] = [
-  // INFANTIL
-  { id: 'infantil_iii', name: 'INFANTIL III', group: 'infantil', subject_workloads: DEFAULT_INFANTIL_WORKLOAD, created_at: new Date().toISOString() },
-  { id: 'infantil_iv', name: 'INFANTIL IV', group: 'infantil', subject_workloads: DEFAULT_INFANTIL_WORKLOAD, created_at: new Date().toISOString() },
-  { id: 'infantil_v', name: 'INFANTIL V', group: 'infantil', subject_workloads: DEFAULT_INFANTIL_WORKLOAD, created_at: new Date().toISOString() },
-  // ANOS INICIAIS
-  { id: '1_ano_a', name: '1° ANO A', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '1_ano_b', name: '1° ANO B', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '2_ano_a', name: '2° ANO A', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '2_ano_b', name: '2° ANO B', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '3_ano_a', name: '3° ANO A', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '3_ano_b', name: '3° ANO B', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '4_ano_a', name: '4° ANO A', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '4_ano_b', name: '4° ANO B', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '5_ano_a', name: '5° ANO A', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '5_ano_b', name: '5° ANO B', group: 'anos_iniciais', subject_workloads: DEFAULT_INICIAIS_WORKLOAD, created_at: new Date().toISOString() },
-  // ANOS FINAIS
-  { id: '6_ano_a', name: '6° ANO A', group: 'anos_finais', subject_workloads: DEFAULT_FINAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '6_ano_b', name: '6° ANO B', group: 'anos_finais', subject_workloads: DEFAULT_FINAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '7_ano_a', name: '7° ANO A', group: 'anos_finais', subject_workloads: DEFAULT_FINAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '7_ano_b', name: '7° ANO B', group: 'anos_finais', subject_workloads: DEFAULT_FINAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '8_ano_a', name: '8° ANO A', group: 'anos_finais', subject_workloads: DEFAULT_FINAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '8_ano_b', name: '8° ANO B', group: 'anos_finais', subject_workloads: DEFAULT_FINAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '9_ano_a', name: '9° ANO A', group: 'anos_finais', subject_workloads: DEFAULT_FINAIS_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '9_ano_b', name: '9° ANO B', group: 'anos_finais', subject_workloads: DEFAULT_FINAIS_WORKLOAD, created_at: new Date().toISOString() },
-  // ENSINO MEDIO
-  { id: '1_serie_a', name: '1ª SÉRIE A', group: 'ensino_medio', subject_workloads: DEFAULT_MEDIO_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '1_serie_b', name: '1ª SÉRIE B', group: 'ensino_medio', subject_workloads: DEFAULT_MEDIO_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '2_serie_a', name: '2ª SÉRIE A', group: 'ensino_medio', subject_workloads: DEFAULT_MEDIO_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '2_serie_b', name: '2ª SÉRIE B', group: 'ensino_medio', subject_workloads: DEFAULT_MEDIO_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '3_serie_a', name: '3ª SÉRIE A', group: 'ensino_medio', subject_workloads: DEFAULT_MEDIO_WORKLOAD, created_at: new Date().toISOString() },
-  { id: '3_serie_b', name: '3ª SÉRIE B', group: 'ensino_medio', subject_workloads: DEFAULT_MEDIO_WORKLOAD, created_at: new Date().toISOString() }
-];
+const DEFAULT_CLASSES: SchoolClass[] = [];
 
 const DEFAULT_TEACHERS: Teacher[] = [];
 
@@ -58,69 +27,56 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
   const [scheduleSlots, setScheduleSlots] = useState<ScheduleSlot[]>([]);
   const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>([]);
   const [activeTab, setActiveTab] = useState<'grade' | 'professores' | 'turmas'>('grade');
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Load from local storage
+  // Load from storage (with Supabase fallback)
   useEffect(() => {
-    const t = localStorage.getItem('cr_teachers');
-    if (t) {
-      const parsed = JSON.parse(t);
-      if (parsed.length > 0) {
-        setTeachers(parsed);
-      } else {
-        setTeachers(DEFAULT_TEACHERS);
-        localStorage.setItem('cr_teachers', JSON.stringify(DEFAULT_TEACHERS));
+    const loadData = async () => {
+      try {
+        const dbTeachers = await storage.getTeachers();
+        setTeachers(dbTeachers || []);
+
+        const dbClasses = await storage.getClasses();
+        setClasses(dbClasses || []);
+
+        const dbSlots = await storage.getScheduleSlots();
+        setScheduleSlots(dbSlots || []);
+
+        const dbBlocks = await storage.getTimeBlocks();
+        setTimeBlocks(dbBlocks || []);
+      } catch (err) {
+        console.error('Error loading schedule data from storage:', err);
+      } finally {
+        setIsLoading(false);
       }
-    } else {
-      setTeachers(DEFAULT_TEACHERS);
-      localStorage.setItem('cr_teachers', JSON.stringify(DEFAULT_TEACHERS));
-    }
-    
-    const c = localStorage.getItem('cr_classes');
-    if (c) {
-      const parsed = JSON.parse(c);
-      if (parsed.length > 0) {
-        // Guarantee all loaded classes have subject_workloads defined
-        const validated = parsed.map((cls: SchoolClass) => {
-          if (!cls.subject_workloads || Object.keys(cls.subject_workloads).length === 0) {
-            const defaultW = cls.group === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
-                             cls.group === 'anos_iniciais' ? DEFAULT_INICIAIS_WORKLOAD :
-                             cls.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
-            return { ...cls, subject_workloads: { ...defaultW } };
-          }
-          return cls;
-        });
-        setClasses(validated);
-      } else {
-        setClasses(DEFAULT_CLASSES);
-        localStorage.setItem('cr_classes', JSON.stringify(DEFAULT_CLASSES));
-      }
-    } else {
-      setClasses(DEFAULT_CLASSES);
-      localStorage.setItem('cr_classes', JSON.stringify(DEFAULT_CLASSES));
-    }
-    
-    const s = localStorage.getItem('cr_schedule_slots');
-    if (s) setScheduleSlots(JSON.parse(s));
-    const tb = localStorage.getItem('cr_time_blocks');
-    if (tb) setTimeBlocks(JSON.parse(tb));
+    };
+    loadData();
   }, []);
 
-  // Save to local storage whenever they change
+  // Save to storage whenever state changes (guarded by isLoading flag)
   useEffect(() => {
-    localStorage.setItem('cr_teachers', JSON.stringify(teachers));
-  }, [teachers]);
+    if (!isLoading) {
+      storage.saveTeachers(teachers);
+    }
+  }, [teachers, isLoading]);
 
   useEffect(() => {
-    localStorage.setItem('cr_classes', JSON.stringify(classes));
-  }, [classes]);
+    if (!isLoading) {
+      storage.saveClasses(classes);
+    }
+  }, [classes, isLoading]);
 
   useEffect(() => {
-    localStorage.setItem('cr_schedule_slots', JSON.stringify(scheduleSlots));
-  }, [scheduleSlots]);
+    if (!isLoading) {
+      storage.saveScheduleSlots(scheduleSlots);
+    }
+  }, [scheduleSlots, isLoading]);
 
   useEffect(() => {
-    localStorage.setItem('cr_time_blocks', JSON.stringify(timeBlocks));
-  }, [timeBlocks]);
+    if (!isLoading) {
+      storage.saveTimeBlocks(timeBlocks);
+    }
+  }, [timeBlocks, isLoading]);
 
 
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'super_admin';
