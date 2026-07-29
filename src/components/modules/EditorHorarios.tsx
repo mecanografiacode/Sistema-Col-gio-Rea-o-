@@ -732,10 +732,18 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
 
     // 4. Prepare list of temporary slots (preserve other classes, rewrite this class's slots)
     const otherClassesSlots = scheduleSlots.filter(s => s.class_id !== selectedClassId);
-    const newSlots: ScheduleSlot[] = [];
+
+    // List all cells: (day, block) sorted by day then block
+    const cells: { block: TimeBlock, day: DayOfWeek, assigned: boolean, subject: string, teacher_id: string }[] = [];
+    days.forEach(day => {
+      blocks.forEach(block => {
+        cells.push({ block, day, assigned: false, subject: '', teacher_id: '' });
+      });
+    });
 
     // Helper to check if a teacher has a conflict at a specific day/block
     const hasTeacherConflict = (teacherId: string, day: DayOfWeek, block: TimeBlock) => {
+      // Check conflict in other classes' schedules
       const hasConflictInOthers = otherClassesSlots.some(s => 
         s.teacher_id === teacherId && 
         s.day_of_week === day &&
@@ -745,14 +753,16 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       );
       if (hasConflictInOthers) return true;
 
-      const hasConflictInNew = newSlots.some(s => 
-        s.teacher_id === teacherId && 
-        s.day_of_week === day &&
-        ((block.start_time >= s.start_time && block.start_time < s.end_time) || 
-         (block.end_time > s.start_time && block.end_time <= s.end_time) ||
-         (block.start_time <= s.start_time && block.end_time >= s.end_time))
+      // Check conflict in already assigned cells of current class in this auto-scheduler run
+      const hasConflictInCurrent = cells.some(c => 
+        c.assigned && 
+        c.teacher_id === teacherId && 
+        c.day === day &&
+        ((block.start_time >= c.block.start_time && block.start_time < c.block.end_time) || 
+         (block.end_time > c.block.start_time && block.end_time <= c.block.end_time) ||
+         (block.start_time <= c.block.start_time && block.end_time >= c.block.end_time))
       );
-      return hasConflictInNew;
+      return hasConflictInCurrent;
     };
 
     // Helper to check if a teacher is available on a specific day & shift
@@ -765,125 +775,130 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       return true;
     };
 
-    // List all cells: (block, day)
-    const cells: { block: TimeBlock, day: DayOfWeek }[] = [];
-    blocks.forEach(block => {
-      days.forEach(day => {
-        cells.push({ block, day });
+    // Sort subjects by difficulty (fewer possible teachers first, then more remaining lessons)
+    const sortPoolByDifficulty = () => {
+      subjectPool.sort((a, b) => {
+        const teachersA = teachersBySubject[a.subject]?.length || 0;
+        const teachersB = teachersBySubject[b.subject]?.length || 0;
+        if (teachersA !== teachersB) {
+          return teachersA - teachersB; // Fewer available teachers first
+        }
+        return b.remaining - a.remaining; // More remaining lessons first
       });
-    });
-
-    const subjectCountPerDay: { [day: string]: { [subject: string]: number } } = {};
-    days.forEach(d => {
-      subjectCountPerDay[d] = {};
-    });
-
-    const sortPool = () => {
-      subjectPool.sort((a, b) => b.remaining - a.remaining);
     };
 
     const unassignedSubjectsList: string[] = [];
     let scheduledWithTeacher = 0;
     let scheduledWithoutTeacher = 0;
 
-    // Try to fill the cells
-    cells.forEach(({ block, day }) => {
-      sortPool();
-      let assigned = false;
+    sortPoolByDifficulty();
 
-      // First pass: try with daily frequency constraint (at most 2 of the same subject per day)
-      for (let i = 0; i < subjectPool.length; i++) {
-        const poolItem = subjectPool[i];
-        if (poolItem.remaining <= 0) continue;
+    // Place each lesson from our sorted subject pool
+    subjectPool.forEach(poolItem => {
+      const subject = poolItem.subject;
+      const possibleTeachers = teachersBySubject[subject] || [];
 
-        const subject = poolItem.subject;
-        const dailyCount = subjectCountPerDay[day][subject] || 0;
-        if (dailyCount >= 2 && subjectPool.some(item => item.remaining > 0 && (subjectCountPerDay[day][item.subject] || 0) < 2)) {
-          continue;
-        }
+      while (poolItem.remaining > 0) {
+        let placed = false;
 
-        const possibleTeachers = teachersBySubject[subject] || [];
-        const availableTeacher = possibleTeachers.find(t => 
-          isTeacherAvailable(t, day, block) && !hasTeacherConflict(t.id, day, block)
-        );
+        // Pass 1: Try to place with daily frequency limit (< 2 lessons/day) and a conflict-free teacher
+        for (let c of cells) {
+          if (c.assigned) continue;
 
-        if (availableTeacher) {
-          newSlots.push({
-            id: crypto.randomUUID(),
-            class_id: selectedClassId,
-            teacher_id: availableTeacher.id,
-            subject: subject,
-            day_of_week: day,
-            start_time: block.start_time,
-            end_time: block.end_time
-          });
+          const dailyCount = cells.filter(cell => cell.assigned && cell.day === c.day && cell.subject === subject).length;
+          if (dailyCount >= 2) continue;
 
-          poolItem.remaining -= 1;
-          subjectCountPerDay[day][subject] = (subjectCountPerDay[day][subject] || 0) + 1;
-          assigned = true;
-          scheduledWithTeacher++;
-          break;
-        }
-      }
-
-      // Second pass: ignore daily count constraint, but still require a conflict-free teacher
-      if (!assigned) {
-        for (let i = 0; i < subjectPool.length; i++) {
-          const poolItem = subjectPool[i];
-          if (poolItem.remaining <= 0) continue;
-
-          const subject = poolItem.subject;
-          const possibleTeachers = teachersBySubject[subject] || [];
           const availableTeacher = possibleTeachers.find(t => 
-            isTeacherAvailable(t, day, block) && !hasTeacherConflict(t.id, day, block)
+            isTeacherAvailable(t, c.day, c.block) && !hasTeacherConflict(t.id, c.day, c.block)
           );
 
           if (availableTeacher) {
-            newSlots.push({
-              id: crypto.randomUUID(),
-              class_id: selectedClassId,
-              teacher_id: availableTeacher.id,
-              subject: subject,
-              day_of_week: day,
-              start_time: block.start_time,
-              end_time: block.end_time
-            });
-
-            poolItem.remaining -= 1;
-            subjectCountPerDay[day][subject] = (subjectCountPerDay[day][subject] || 0) + 1;
-            assigned = true;
+            c.assigned = true;
+            c.subject = subject;
+            c.teacher_id = availableTeacher.id;
+            poolItem.remaining--;
             scheduledWithTeacher++;
+            placed = true;
             break;
           }
         }
-      }
 
-      // Third pass (Fallback): assign the subject anyway even if no teacher is available!
-      if (!assigned) {
-        for (let i = 0; i < subjectPool.length; i++) {
-          const poolItem = subjectPool[i];
-          if (poolItem.remaining <= 0) continue;
+        if (placed) continue;
 
-          const subject = poolItem.subject;
-          newSlots.push({
-            id: crypto.randomUUID(),
-            class_id: selectedClassId,
-            teacher_id: '', // No teacher
-            subject: subject,
-            day_of_week: day,
-            start_time: block.start_time,
-            end_time: block.end_time
-          });
+        // Pass 2: Relax daily count constraint (allow >= 2 lessons/day if needed), but still require an available teacher
+        for (let c of cells) {
+          if (c.assigned) continue;
 
-          poolItem.remaining -= 1;
-          subjectCountPerDay[day][subject] = (subjectCountPerDay[day][subject] || 0) + 1;
-          assigned = true;
+          const availableTeacher = possibleTeachers.find(t => 
+            isTeacherAvailable(t, c.day, c.block) && !hasTeacherConflict(t.id, c.day, c.block)
+          );
+
+          if (availableTeacher) {
+            c.assigned = true;
+            c.subject = subject;
+            c.teacher_id = availableTeacher.id;
+            poolItem.remaining--;
+            scheduledWithTeacher++;
+            placed = true;
+            break;
+          }
+        }
+
+        if (placed) continue;
+
+        // Pass 3: Fallback - assign to ANY free cell with daily count limit (< 2), without a teacher
+        for (let c of cells) {
+          if (c.assigned) continue;
+
+          const dailyCount = cells.filter(cell => cell.assigned && cell.day === c.day && cell.subject === subject).length;
+          if (dailyCount >= 2) continue;
+
+          c.assigned = true;
+          c.subject = subject;
+          c.teacher_id = ''; // No teacher
+          poolItem.remaining--;
           scheduledWithoutTeacher++;
-          unassignedSubjectsList.push(`${subject} na ${day === 'terca' ? 'terça-feira' : day + '-feira'} às ${block.start_time}`);
+          unassignedSubjectsList.push(`${subject} na ${c.day === 'terca' ? 'terça-feira' : c.day + '-feira'} às ${c.block.start_time}`);
+          placed = true;
+          break;
+        }
+
+        if (placed) continue;
+
+        // Pass 4: Ultimate fallback - assign to ANY free cell whatsoever, without a teacher
+        for (let c of cells) {
+          if (c.assigned) continue;
+
+          c.assigned = true;
+          c.subject = subject;
+          c.teacher_id = ''; // No teacher
+          poolItem.remaining--;
+          scheduledWithoutTeacher++;
+          unassignedSubjectsList.push(`${subject} na ${c.day === 'terca' ? 'terça-feira' : c.day + '-feira'} às ${c.block.start_time}`);
+          placed = true;
+          break;
+        }
+
+        // Safety break if we cannot find any free cell (e.g., more lessons demanded than total blocks available)
+        if (!placed) {
+          console.warn(`Could not find a free slot for lesson of subject ${subject}`);
           break;
         }
       }
     });
+
+    // Convert our assigned cells back to ScheduleSlot format
+    const newSlots: ScheduleSlot[] = cells
+      .filter(c => c.assigned)
+      .map(c => ({
+        id: crypto.randomUUID(),
+        class_id: selectedClassId,
+        teacher_id: c.teacher_id,
+        subject: c.subject,
+        day_of_week: c.day,
+        start_time: c.block.start_time,
+        end_time: c.block.end_time
+      }));
 
     setScheduleSlots([...otherClassesSlots, ...newSlots]);
 
