@@ -1045,42 +1045,9 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
 
         if (placed) continue;
 
-        // Pass 3: Fallback - assign to ANY free cell with daily count limit (< 2), without a teacher
-        for (let c of cells) {
-          if (c.assigned) continue;
-
-          const dailyCount = cells.filter(cell => cell.assigned && cell.day === c.day && cell.subject === subject).length;
-          if (dailyCount >= 2) continue;
-
-          c.assigned = true;
-          c.subject = subject;
-          c.teacher_id = ''; // No teacher
-          poolItem.remaining--;
-          scheduledWithoutTeacher++;
-          unassignedSubjectsList.push(`${subject} na ${c.day === 'terca' ? 'terça-feira' : c.day + '-feira'} às ${c.block.start_time}`);
-          placed = true;
-          break;
-        }
-
-        if (placed) continue;
-
-        // Pass 4: Ultimate fallback - assign to ANY free cell whatsoever, without a teacher
-        for (let c of cells) {
-          if (c.assigned) continue;
-
-          c.assigned = true;
-          c.subject = subject;
-          c.teacher_id = ''; // No teacher
-          poolItem.remaining--;
-          scheduledWithoutTeacher++;
-          unassignedSubjectsList.push(`${subject} na ${c.day === 'terca' ? 'terça-feira' : c.day + '-feira'} às ${c.block.start_time}`);
-          placed = true;
-          break;
-        }
-
-        // Safety break if we cannot find any free cell (e.g., more lessons demanded than total blocks available)
         if (!placed) {
-          console.warn(`Could not find a free slot for lesson of subject ${subject}`);
+          // Break to avoid infinite loop since no teacher could take this lesson, and we don't assign it without a teacher
+          console.warn(`Could not find an available teacher for lesson of subject ${subject}`);
           break;
         }
       }
@@ -1105,33 +1072,34 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     details.push(`Total de aulas demandadas pelo currículo: ${totalDemanded}`);
     details.push(`Aulas com professor designado: ${scheduledWithTeacher}`);
     
-    if (scheduledWithoutTeacher > 0) {
-      details.push(`Aulas agendadas SEM professor designado: ${scheduledWithoutTeacher}`);
-      details.push(`Notas de Alinhamento / Detalhes de Alocação:`);
-      unassignedSubjectsList.forEach(item => {
-        details.push(`• Sem prof. alinhado para: ${item}`);
+    if (totalDemanded > scheduledWithTeacher) {
+      details.push(`Aulas não agendadas por falta de professor disponível: ${totalDemanded - scheduledWithTeacher}`);
+      
+      // List missing subjects
+      subjectPool.forEach(poolItem => {
+        if (poolItem.remaining > 0) {
+          details.push(`• Faltou alocar ${poolItem.remaining} aula(s) de ${poolItem.subject}.`);
+        }
       });
-    }
-
-    if (scheduledWithoutTeacher === 0 && totalScheduledWithTeacherAndWithout() === totalDemanded) {
+      
+      setScheduleStatus({
+        message: `Grade organizada parcialmente. Agendadas ${scheduledWithTeacher} de ${totalDemanded} aulas possíveis.`,
+        type: 'warning',
+        details: [
+          ...details,
+          '',
+          'Aviso: Para que a grade horária seja gerada automaticamente, é obrigatório que o professor esteja cadastrado com:',
+          '1. A disciplina selecionada',
+          '2. O segmento (Ex: Ensino Médio)',
+          '3. Os dias disponíveis e o turno correto.'
+        ]
+      });
+    } else {
       setScheduleStatus({
         message: 'Sucesso! Grade horária gerada e 100% alinhada com professores cadastrados.',
         type: 'success',
         details
       });
-    } else {
-      setScheduleStatus({
-        message: `Grade organizada! Agendadas ${scheduledWithTeacher + scheduledWithoutTeacher} de ${totalDemanded} aulas possíveis.`,
-        type: 'warning',
-        details: [
-          ...details,
-          'Dica: Cadastre mais professores correspondentes a este segmento e verifique sua disponibilidade de turnos para preencher as lacunas.'
-        ]
-      });
-    }
-
-    function totalScheduledWithTeacherAndWithout() {
-      return scheduledWithTeacher + scheduledWithoutTeacher;
     }
   };
 
