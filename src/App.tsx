@@ -18,10 +18,36 @@ import { Notificacoes } from './components/modules/Notificacoes';
 import { EditorHorarios } from './components/modules/EditorHorarios';
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    try {
+      const saved = localStorage.getItem('cr_current_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
-  const [activeTab, setActiveTab] = useState<NavTab>('ordens_servico');
+  const [activeTab, setActiveTab] = useState<NavTab>(() => {
+    try {
+      const saved = localStorage.getItem('cr_active_tab');
+      return (saved as NavTab) || 'ordens_servico';
+    } catch {
+      return 'ordens_servico';
+    }
+  });
   const [unreadCount, setUnreadCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem('cr_current_user', JSON.stringify(currentUser));
+    } else {
+      localStorage.removeItem('cr_current_user');
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    localStorage.setItem('cr_active_tab', activeTab);
+  }, [activeTab]);
 
   // Public External Portal State
   const [isPublicPortalOpen, setIsPublicPortalOpen] = useState(false);

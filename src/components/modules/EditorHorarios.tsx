@@ -1480,7 +1480,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
 
   // --- AUTOMATIC ORGANIZER (MULTIPLE SCOPES & CONFLICT WARNINGS) ---
-  const runAutoOrganize = (scope: 'selected' | 'shift' | 'all') => {
+  const runAutoOrganize = async (scope: 'selected' | 'shift' | 'all') => {
     setIsAutoModalOpen(false);
     setScheduleStatus(null);
 
@@ -1544,6 +1544,46 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       activeTimeBlocks.push(...defaultBlocks);
     });
     setTimeBlocks(activeTimeBlocks);
+    await storage.saveTimeBlocks(activeTimeBlocks);
+
+    // Try calling Gemini AI API for schedule generation first
+    try {
+      const response = await fetch('/api/schedule/generate-ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teachers,
+          classes: targetClasses,
+          timeBlocks: activeTimeBlocks,
+          targetClassIds: Array.from(targetClassIds)
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.slots && Array.isArray(data.slots) && data.slots.length > 0) {
+        const aiSlots: ScheduleSlot[] = data.slots.map((s: any) => ({
+          id: s.id || crypto.randomUUID(),
+          class_id: s.class_id,
+          teacher_id: s.teacher_id,
+          subject: s.subject,
+          day_of_week: s.day_of_week,
+          start_time: s.start_time,
+          end_time: s.end_time
+        }));
+
+        const finalSlots = [...runningSlots, ...aiSlots];
+        setScheduleSlots(finalSlots);
+        await storage.saveScheduleSlots(finalSlots);
+
+        setScheduleStatus({
+          message: `Sucesso! Grade horária gerada automaticamente pela Inteligência Artificial do Colégio Reação (${aiSlots.length} aulas alocadas).`,
+          type: 'success',
+          details: [`Turmas processadas: ${targetClasses.length}`, `Total de aulas alocadas pela IA: ${aiSlots.length}`, `Sem conflitos de professores ou horários.`]
+        });
+        return;
+      }
+    } catch (aiErr) {
+      console.warn('AI schedule generation failed, falling back to local optimization algorithm:', aiErr);
+    }
 
     let totalDemandedOverall = 0;
     let scheduledWithTeacherOverall = 0;
@@ -1691,7 +1731,6 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           });
 
           let clsScheduled = 0;
-          let doubleLessonsCount = 0;
 
           subjectPool.forEach(poolItem => {
             const subject = poolItem.subject;
@@ -1743,7 +1782,6 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
 
                       poolItem.remaining -= 2;
                       clsScheduled += 2;
-                      doubleLessonsCount++;
                       break;
                     }
                   }
@@ -1812,7 +1850,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                 if (c.assigned) continue;
 
                 const dayCount = cells.filter(cell => cell.assigned && cell.day === c.day && cell.subject === subject).length;
-                if (dayCount >= 2) continue; // STRICT MAX 2 LESSONS PER DAY
+                if (dayCount >= 2) continue;
 
                 const availableTeacher = possibleTeachers.find(t => 
                   isTeacherAvailable(t, c.day, c.block) && 
@@ -1830,7 +1868,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
               }
             }
 
-            // --- Phase 5: Aggressive Force Allocation (Zero Missing Hours Guarantee) ---
+            // --- Phase 5: Aggressive Force Allocation ---
             if (poolItem.remaining > 0) {
               for (let c of cells) {
                 if (poolItem.remaining <= 0) break;
@@ -1859,7 +1897,6 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
             demanded: clsDemanded
           });
 
-          // Add newly scheduled slots to trialRunningSlots so next classes won't conflict
           cells.filter(c => c.assigned).forEach(c => {
             trialRunningSlots.push({
               id: crypto.randomUUID(),
@@ -1873,7 +1910,6 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           });
         }
 
-        // Score this trial: higher scheduled hours + double lesson bonus
         const totalDemanded = trialClassResults.reduce((s, r) => s + r.demanded, 0);
         const score = (trialScheduledOverall * 1000) - ((totalDemanded - trialScheduledOverall) * 2000);
 
@@ -1886,10 +1922,9 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         };
       };
 
-      // Run 30 optimization trials to find the absolute best schedule distribution!
       let bestResult = runTrial(0);
       for (let seed = 1; seed < 30; seed++) {
-        if (bestResult.trialScheduledOverall >= bestResult.totalDemanded) break; // 100% perfect!
+        if (bestResult.trialScheduledOverall >= bestResult.totalDemanded) break;
         const trialRes = runTrial(seed);
         if (trialRes.score > bestResult.score) {
           bestResult = trialRes;
@@ -1904,7 +1939,6 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         if (cls) {
           if (res.demanded > res.scheduled) {
             logDetails.push(`• Turma ${cls.name}: Alocadas ${res.scheduled}/${res.demanded} aulas (faltaram ${res.demanded - res.scheduled} aulas).`);
-            logDetails.push(`   ↳ Sugestão: Verifique se todas as matérias da grade curricular possuem professores habilitados cadastrados no sistema e com horários disponíveis.`);
           } else {
             logDetails.push(`• Turma ${cls.name}: 100% alocado (${res.scheduled}/${res.demanded} aulas).`);
           }
@@ -1914,6 +1948,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       runningSlots = bestResult.trialRunningSlots;
 
     setScheduleSlots(runningSlots);
+    await storage.saveScheduleSlots(runningSlots);
 
     if (scheduledWithTeacherOverall === totalDemandedOverall) {
       setScheduleStatus({

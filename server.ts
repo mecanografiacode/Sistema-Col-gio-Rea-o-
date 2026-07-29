@@ -167,6 +167,77 @@ Dicas Específicas para o Colégio Reação:
   }
 });
 
+// --- API ENDPOINT: AI Schedule Generator ---
+app.post('/api/schedule/generate-ai', async (req, res) => {
+  try {
+    const { teachers, classes, timeBlocks, targetClassIds } = req.body;
+    const ai = getGeminiClient();
+
+    if (!ai) {
+      return res.status(400).json({ error: 'Chave da API Gemini não configurada no servidor.' });
+    }
+
+    const promptText = `
+Você é um especialista em planejamento e otimização de grades horárias escolares para o Colégio Reação em Brasília/DF.
+Sua tarefa é gerar a distribuição otimizada das aulas (Schedule Slots) para as turmas solicitadas, respeitando estritamente:
+1. A carga horária de disciplinas de cada turma.
+2. A disponibilidade e disciplinas habilitadas de cada professor.
+3. Os horários e blocos de tempo definidos para cada turma (ignorando intervalos/recreios).
+4. Sem sobreposição ou conflito de horário para nenhum professor (um professor não pode estar em duas turmas no mesmo dia e horário).
+5. Dias da semana permitidos: 'segunda', 'terca', 'quarta', 'quinta', 'sexta'.
+
+Dados recebidos:
+- Turmas: ${JSON.stringify(classes)}
+- Professores: ${JSON.stringify(teachers)}
+- Blocos de Tempo: ${JSON.stringify(timeBlocks)}
+- IDs das turmas alvo: ${JSON.stringify(targetClassIds)}
+
+Retorne um array JSON contendo os objetos de ScheduleSlot gerados com as propriedades:
+- class_id (string)
+- teacher_id (string)
+- subject (string)
+- day_of_week ('segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta')
+- start_time (string, ex: '07:15')
+- end_time (string, ex: '08:05')
+`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-lite',
+      contents: promptText,
+      config: {
+        systemInstruction: 'Você é um algoritmo especialista em alocação escolar sem conflitos. Retorne estritamente em JSON conforme o schema.',
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              class_id: { type: Type.STRING },
+              teacher_id: { type: Type.STRING },
+              subject: { type: Type.STRING },
+              day_of_week: { type: Type.STRING },
+              start_time: { type: Type.STRING },
+              end_time: { type: Type.STRING }
+            },
+            required: ['class_id', 'teacher_id', 'subject', 'day_of_week', 'start_time', 'end_time']
+          }
+        }
+      }
+    });
+
+    if (response.text) {
+      const generatedSlots = JSON.parse(response.text);
+      return res.json({ success: true, slots: generatedSlots });
+    }
+
+    return res.status(500).json({ error: 'Falha ao gerar grade horária com IA.' });
+  } catch (error: any) {
+    console.error('Error in /api/schedule/generate-ai:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao processar IA de horários' });
+  }
+});
+
+
 // --- API ENDPOINT: Send Email Notifications ---
 app.post('/api/notifications/send-email', async (req, res) => {
   try {

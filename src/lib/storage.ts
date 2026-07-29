@@ -1744,16 +1744,37 @@ class StorageService {
 
   // --- SCHEDULE SLOTS ---
   public async getScheduleSlots(): Promise<any[]> {
-    return this.fetchFromSupabaseOrCache<any>('schedule_slots', 'cr_schedule_slots', [], 'day_of_week', true);
+    const slots = await this.fetchFromSupabaseOrCache<any>('schedule_slots', 'cr_schedule_slots', [], 'day_of_week', true);
+    // Deduplicate slots by class_id + day_of_week + start_time to prevent any overlap/accumulation
+    const seen = new Set<string>();
+    const uniqueSlots: any[] = [];
+    for (const s of slots) {
+      const key = `${s.class_id || 'all'}_${s.day_of_week || 'segunda'}_${s.start_time || '07:15'}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueSlots.push(s);
+      }
+    }
+    return uniqueSlots;
   }
 
   public async saveScheduleSlots(slots: any[]): Promise<void> {
-    this.setItem('cr_schedule_slots', slots);
+    // Deduplicate before saving
+    const seen = new Set<string>();
+    const uniqueSlots: any[] = [];
+    for (const s of slots) {
+      const key = `${s.class_id || 'all'}_${s.day_of_week || 'segunda'}_${s.start_time || '07:15'}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueSlots.push(s);
+      }
+    }
+
+    this.setItem('cr_schedule_slots', uniqueSlots);
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        // Delete slots that are no longer in the list (if we have any IDs)
-        const ids = slots.map(s => ensureValidUuid(s.id));
+        const ids = uniqueSlots.map(s => ensureValidUuid(s.id));
         if (ids.length > 0) {
           const idsString = ids.map(id => `'${id}'`).join(',');
           await supabase.from('schedule_slots').delete().not('id', 'in', `(${idsString})`);
@@ -1761,7 +1782,7 @@ class StorageService {
           await supabase.from('schedule_slots').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         }
         // Upsert current slots
-        for (const s of slots) {
+        for (const s of uniqueSlots) {
           const payload = {
             id: ensureValidUuid(s.id),
             class_id: toValidUuidOrNull(s.class_id),
