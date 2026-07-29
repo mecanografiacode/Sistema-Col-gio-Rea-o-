@@ -1474,10 +1474,51 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
   const [cellTeacherId, setCellTeacherId] = useState('');
   const [cellSubject, setCellSubject] = useState('');
 
+  const checkSlotConflict = (slot: ScheduleSlot): { isConflict: boolean; conflictingClasses: string[] } => {
+    const conflictingSlots = scheduleSlots.filter(s => 
+      s.id !== slot.id &&
+      s.teacher_id === slot.teacher_id &&
+      s.day_of_week === slot.day_of_week &&
+      timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)
+    );
+    if (conflictingSlots.length === 0) return { isConflict: false, conflictingClasses: [] };
+    const conflictingClassIds = Array.from(new Set(conflictingSlots.map(s => s.class_id)));
+    const conflictingClasses = conflictingClassIds.map(cid => classes.find(c => c.id === cid)?.name || 'Outra Turma');
+    return { isConflict: true, conflictingClasses };
+  };
+
+  useEffect(() => {
+    if (scheduleSlots.length === 0) return;
+    const allConflicts: string[] = [];
+    scheduleSlots.forEach(slot => {
+      const { isConflict, conflictingClasses } = checkSlotConflict(slot);
+      if (isConflict) {
+        const clsName = classes.find(c => c.id === slot.class_id)?.name || 'Turma';
+        const teacherName = teachers.find(t => t.id === slot.teacher_id)?.name || 'Professor';
+        allConflicts.push(`Conflito: ${teacherName} alocado em ${clsName} e ${conflictingClasses.join(', ')} na ${slot.day_of_week} (${slot.start_time} - ${slot.end_time})`);
+      }
+    });
+
+    if (allConflicts.length > 0) {
+      const uniqueConflicts = Array.from(new Set(allConflicts));
+      setScheduleStatus({
+        message: `⚠️ Atenção: Detectado(s) ${uniqueConflicts.length} conflito(s) de horário entre professores! As células conflitantes estão destacadas em vermelho na grade.`,
+        type: 'warning',
+        details: uniqueConflicts.slice(0, 5)
+      });
+    }
+  }, [scheduleSlots, teachers, classes]);
+
   // Time blocks are now strictly created/managed upon user request (e.g. clicking Organizar Automaticamente or manual addition)
   const classTimeBlocks = timeBlocks
     .filter(tb => tb.class_id === selectedClassId)
     .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
+  // --- RESOLVE CONFLICTS AUTOMATICALLY ---
+  const resolveConflictsAutomatically = async () => {
+    setScheduleStatus(null);
+    await runAutoOrganize('all');
+  };
 
   // --- AUTOMATIC ORGANIZER (MULTIPLE SCOPES & CONFLICT WARNINGS) ---
   const runAutoOrganize = async (scope: 'selected' | 'shift' | 'all') => {
@@ -2543,14 +2584,24 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           scheduleStatus.type === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-800' :
           'bg-rose-50 border-rose-200 text-rose-800'
         }`}>
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-2 flex-wrap gap-2">
             <AlertCircle className={`w-5 h-5 ${
               scheduleStatus.type === 'success' ? 'text-emerald-600' :
               scheduleStatus.type === 'warning' ? 'text-amber-600' :
               'text-rose-600'
             }`} />
             <span className="font-bold text-sm">{scheduleStatus.message}</span>
-            <button onClick={() => setScheduleStatus(null)} className="ml-auto text-xs font-semibold hover:underline">Fechar</button>
+            <div className="ml-auto flex items-center gap-2">
+              {scheduleStatus.type === 'warning' && (
+                <button
+                  onClick={resolveConflictsAutomatically}
+                  className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm transition-all flex items-center gap-1.5"
+                >
+                  🛠️ Arrumar conflito automaticamente
+                </button>
+              )}
+              <button onClick={() => setScheduleStatus(null)} className="text-xs font-semibold hover:underline px-2 py-1">Fechar</button>
+            </div>
           </div>
           {scheduleStatus.details && scheduleStatus.details.length > 0 && (
             <ul className="list-disc list-inside text-xs space-y-1 pl-1 opacity-90">
@@ -2816,12 +2867,24 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                                     <button onClick={() => setEditingCell(null)} className="flex-1 bg-slate-100 text-slate-600 text-[10px] font-bold py-1 rounded">Cancelar</button>
                                   </div>
                                 </div>
-                              ) : existingSlot ? (
-                                <div className="flex flex-col items-center justify-center h-full min-h-[60px] p-2 bg-red-50/50 rounded-lg border border-red-100">
-                                  <span className="font-bold text-xs text-slate-800 text-center">{existingSlot.subject}</span>
-                                  <span className="text-[10px] text-slate-500 text-center">{teachers.find(t => t.id === existingSlot.teacher_id)?.name}</span>
-                                </div>
-                              ) : isRestricted6thSlot ? (
+                              ) : existingSlot ? (() => {
+                                const conflict = checkSlotConflict(existingSlot);
+                                return (
+                                  <div className={`flex flex-col items-center justify-center h-full min-h-[60px] p-2 rounded-lg border transition-all ${
+                                    conflict.isConflict 
+                                      ? 'bg-red-100 border-red-500 text-red-950 shadow-md ring-2 ring-red-400 animate-pulse' 
+                                      : 'bg-emerald-50/60 border-emerald-200 text-slate-800'
+                                  }`}>
+                                    {conflict.isConflict && (
+                                      <span className="text-[9px] font-bold uppercase tracking-wider text-red-700 bg-red-200 px-1.5 py-0.5 rounded mb-0.5 flex items-center gap-0.5">
+                                        ⚠️ Conflito
+                                      </span>
+                                    )}
+                                    <span className="font-bold text-xs text-center">{existingSlot.subject}</span>
+                                    <span className="text-[10px] opacity-80 text-center">{teachers.find(t => t.id === existingSlot.teacher_id)?.name || 'S/ Prof'}</span>
+                                  </div>
+                                );
+                              })() : isRestricted6thSlot ? (
                                 <div className="flex flex-col items-center justify-center h-full min-h-[60px] p-2 bg-slate-100/60 rounded-lg border border-dashed border-slate-200">
                                   <span className="text-[11px] font-medium text-slate-400 text-center">Sem 6º Horário</span>
                                   <span className="text-[9px] text-slate-400 text-center">(Apenas Ter/Qui)</span>

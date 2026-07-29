@@ -202,10 +202,10 @@ Retorne um array JSON contendo os objetos de ScheduleSlot gerados com as proprie
 `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+      model: 'gemini-3.6-flash',
       contents: promptText,
       config: {
-        systemInstruction: 'Você é um algoritmo especialista em alocação escolar sem conflitos. Retorne estritamente em JSON conforme o schema.',
+        systemInstruction: 'Você é um algoritmo especialista sênior em alocação escolar sem conflitos de horários de professores. REGRA ABSOLUTA: Nenhum professor pode lecionar em duas turmas diferentes no mesmo dia e no mesmo horário (conflito zero). Retorne estritamente em JSON conforme o schema.',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
