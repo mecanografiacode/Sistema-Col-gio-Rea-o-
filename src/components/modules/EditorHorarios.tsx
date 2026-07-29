@@ -1852,16 +1852,19 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       return arr;
     };
 
-    // Multi-trial optimizer function for generating the schedule
+    // Multi-trial optimizer function for generating the schedule using global constraint satisfaction
     const runTrial = (trialIndex: number) => {
       let trialRunningSlots = [...runningSlots];
-      let trialScheduledOverall = 0;
-      const trialClassResults: { classId: string, cells: { block: TimeBlock, day: DayOfWeek, assigned: boolean, subject: string, teacher_id: string }[], scheduled: number, demanded: number }[] = [];
 
-      // Fully shuffle classes in each trial to balance priority and optimize general results
-      const sortedTargetClasses = shuffleArray(targetClasses);
+      interface TrialMeeting {
+        id: string;
+        classId: string;
+        subject: string;
+        size: number;
+      }
 
-      for (const cls of sortedTargetClasses) {
+      let trialMeetings: TrialMeeting[] = [];
+      targetClasses.forEach(cls => {
         let workloads = cls.subject_workloads;
         if (!workloads || Object.keys(workloads).length === 0) {
           workloads = cls.group === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
@@ -1869,323 +1872,265 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                       cls.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
         }
 
-        const subjectPool = Object.entries(workloads)
-          .map(([subject, hours]) => ({ subject, remaining: hours }))
-          .filter(item => item.remaining > 0);
+        Object.entries(workloads).forEach(([subject, hours]) => {
+          if (hours <= 0) return;
+          let remaining = hours;
+          while (remaining >= 2) {
+            trialMeetings.push({
+              id: crypto.randomUUID(),
+              classId: cls.id,
+              subject,
+              size: 2
+            });
+            remaining -= 2;
+          }
+          if (remaining === 1) {
+            trialMeetings.push({
+              id: crypto.randomUUID(),
+              classId: cls.id,
+              subject,
+              size: 1
+            });
+          }
+        });
+      });
 
-        const clsDemanded = subjectPool.reduce((sum, item) => sum + item.remaining, 0);
+      const totalDemanded = trialMeetings.reduce((sum, m) => sum + m.size, 0);
 
+      const getTeacherAssignedHours = (teacherId: string) => {
+        return trialRunningSlots.filter(s => s.teacher_id === teacherId).length;
+      };
+
+      const isTeacherAvailable = (teacher: Teacher, day: DayOfWeek, block: TimeBlock, clsBlocks: TimeBlock[]) => {
+        if (!teacher.available_days?.includes(day)) return false;
+        const startHour = parseInt(normalizeTime(block.start_time).split(':')[0]);
+        const isMorning = startHour < 13;
+        if (teacher.availability_shift === 'matutino' && !isMorning) return false;
+        if (teacher.availability_shift === 'vespertino' && isMorning) return false;
+
+        const slotIndex = clsBlocks.findIndex(b => b.id === block.id) + 1;
+        if (teacher.available_slots && teacher.available_slots.length > 0 && teacher.available_slots.length < 6) {
+          if (slotIndex > 0 && !teacher.available_slots.includes(slotIndex)) {
+            return false;
+          }
+        }
+
+        if (teacher.availability_grid && Object.keys(teacher.availability_grid).length > 0) {
+          const key = `${day}-${slotIndex}`;
+          if (teacher.availability_grid[key] === false) {
+            return false;
+          }
+        }
+
+        return true;
+      };
+
+      const getFlexibility = (m: TrialMeeting) => {
+        const cls = targetClasses.find(c => c.id === m.classId)!;
+        const qTeachers = teachers.filter(t =>
+          t.subjects.includes(m.subject) &&
+          t.groups.includes(cls.group) &&
+          (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(cls.id))
+        );
+        if (qTeachers.length === 0) return 99999;
+        let totalAvail = 0;
+        qTeachers.forEach(t => {
+          if (t.availability_grid) {
+            totalAvail += Object.values(t.availability_grid).filter(Boolean).length;
+          } else {
+            totalAvail += 30;
+          }
+        });
+        const sizeBonus = m.size === 2 ? 0 : 5000;
+        return qTeachers.length * 100 + totalAvail + sizeBonus;
+      };
+
+      let meetingsPool = [...trialMeetings];
+      let scheduledCount = 0;
+
+      const sortPool = () => {
+        meetingsPool.sort((a, b) => {
+          const flexA = getFlexibility(a);
+          const flexB = getFlexibility(b);
+          if (flexA !== flexB) return flexA - flexB;
+          return Math.random() - 0.5;
+        });
+      };
+
+      sortPool();
+
+      while (meetingsPool.length > 0) {
+        const m = meetingsPool.shift()!;
+        const cls = targetClasses.find(c => c.id === m.classId)!;
         const clsBlocks = activeTimeBlocks
           .filter(b => b.class_id === cls.id && !b.is_interval)
           .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
 
-        const teachersBySubject: { [subject: string]: Teacher[] } = {};
-        subjectPool.forEach(item => {
-          teachersBySubject[item.subject] = teachers.filter(t => 
-            t.subjects.includes(item.subject) && 
-            t.groups.includes(cls.group) &&
-            (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(cls.id))
-          );
-        });
-
         const isTargetSpecialClass = is678Grade(cls.name);
+        const qTeachers = teachers.filter(t =>
+          t.subjects.includes(m.subject) &&
+          t.groups.includes(cls.group) &&
+          (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(cls.id))
+        );
 
-        const cells: { block: TimeBlock, day: DayOfWeek, assigned: boolean, subject: string, teacher_id: string }[] = [];
-        days.forEach(day => {
-          clsBlocks.forEach((block) => {
-            const nonIntervalIdx = clsBlocks.findIndex(b => b.id === block.id);
-            const is6thSlot = nonIntervalIdx >= 5;
-            const isRestrictedDay = day === 'segunda' || day === 'quarta' || day === 'sexta';
+        interface Candidate {
+          teacher: Teacher;
+          day: DayOfWeek;
+          blockIndex: number;
+          score: number;
+        }
+        let candidates: Candidate[] = [];
 
-            // Skip 6th slot on Mon/Wed/Fri for 6th, 7th, 8th grade
-            if (isTargetSpecialClass && isRestrictedDay && is6thSlot) {
-              return;
-            }
+        qTeachers.forEach(t => {
+          const currentHours = getTeacherAssignedHours(t.id);
+          if (currentHours + m.size > (t.workload_hours || 20)) return;
 
-            cells.push({ block, day, assigned: false, subject: '', teacher_id: '' });
-          });
-        });
+          days.forEach(day => {
+            const dayLessonsCount = trialRunningSlots.filter(s =>
+              s.class_id === cls.id &&
+              s.day_of_week === day &&
+              s.subject === m.subject
+            ).length;
 
-        const hasTeacherConflict = (teacherId: string, day: DayOfWeek, block: TimeBlock) => {
-          const conflictInRunning = trialRunningSlots.some(s => 
-            s.teacher_id === teacherId && 
-            s.day_of_week === day &&
-            timesOverlap(block.start_time, block.end_time, s.start_time, s.end_time)
-          );
-          if (conflictInRunning) return true;
+            if (dayLessonsCount + m.size > 2) return;
 
-          return cells.some(c => 
-            c.assigned && 
-            c.teacher_id === teacherId && 
-            c.day === day &&
-            timesOverlap(block.start_time, block.end_time, c.block.start_time, c.block.end_time)
-          );
-        };
+            const maxIndex = m.size === 2 ? clsBlocks.length - 2 : clsBlocks.length - 1;
+            for (let i = 0; i <= maxIndex; i++) {
+              const b1 = clsBlocks[i];
 
-        const isTeacherAvailable = (teacher: Teacher, day: DayOfWeek, block: TimeBlock) => {
-          if (!teacher.available_days?.includes(day)) return false;
-          const startHour = parseInt(normalizeTime(block.start_time).split(':')[0]);
-          const isMorning = startHour < 13;
-          if (teacher.availability_shift === 'matutino' && !isMorning) return false;
-          if (teacher.availability_shift === 'vespertino' && isMorning) return false;
-
-          const slotIndex = clsBlocks.findIndex(b => b.id === block.id) + 1;
-          if (teacher.available_slots && teacher.available_slots.length > 0 && teacher.available_slots.length < 6) {
-            if (slotIndex > 0 && !teacher.available_slots.includes(slotIndex)) {
-              return false;
-            }
-          }
-
-          if (teacher.availability_grid && Object.keys(teacher.availability_grid).length > 0) {
-            const key = `${day}-${slotIndex}`;
-            if (teacher.availability_grid[key] === false) {
-              return false;
-            }
-          }
-
-          return true;
-        };
-
-        const getTeacherAssignedHours = (teacherId: string) => {
-          const runningHours = trialRunningSlots.filter(s => s.teacher_id === teacherId).length;
-          const currentRunHours = cells.filter(c => c.assigned && c.teacher_id === teacherId).length;
-          return runningHours + currentRunHours;
-        };
-
-        const getSubjectTeacherFlexibility = (subj: string) => {
-          const pTeachers = teachersBySubject[subj] || [];
-          if (pTeachers.length === 0) return 9999;
-          
-          let minScore = 9999;
-          pTeachers.forEach(t => {
-            const daysCount = t.available_days?.length ?? 5;
-            const slotsCount = (t.available_slots && t.available_slots.length > 0) ? t.available_slots.length : 6;
-            let gridCount = 30;
-            if (t.availability_grid && Object.keys(t.availability_grid).length > 0) {
-              gridCount = Object.values(t.availability_grid).filter(v => v === true).length;
-            }
-            const score = daysCount * 100 + slotsCount * 10 + gridCount;
-            if (score < minScore) {
-              minScore = score;
-            }
-          });
-          return minScore;
-        };
-
-        // Sort subjects: highly restricted teachers first, with a randomized tie-breaker
-        subjectPool.sort((a, b) => {
-          const flexA = getSubjectTeacherFlexibility(a.subject);
-          const flexB = getSubjectTeacherFlexibility(b.subject);
-          if (flexA !== flexB) return flexA - flexB;
-
-          const teachersA = teachersBySubject[a.subject]?.length || 0;
-          const teachersB = teachersBySubject[b.subject]?.length || 0;
-          if (teachersA !== teachersB) return teachersA - teachersB;
-
-          // Random tie-breaker for perfect organic scattering
-          return Math.random() - 0.5;
-        });
-
-        let clsScheduled = 0;
-
-        subjectPool.forEach(poolItem => {
-          const subject = poolItem.subject;
-          const rawPossibleTeachers = teachersBySubject[subject] || [];
-          const possibleTeachers = [...rawPossibleTeachers].sort((t1, t2) => {
-            const days1 = t1.available_days?.length ?? 5;
-            const days2 = t2.available_days?.length ?? 5;
-            if (days1 !== days2) return days1 - days2;
-            return getTeacherAssignedHours(t1.id) - getTeacherAssignedHours(t2.id);
-          });
-
-          // Shuffle the days checked to prevent identical day patterns
-          const daysList = shuffleArray<DayOfWeek>(['segunda', 'terca', 'quarta', 'quinta', 'sexta']);
-
-          // --- Phase 1: Allocate Double Lessons (Aulas Geminadas) on days with 0 lessons of this subject ---
-          if (poolItem.remaining >= 2) {
-            for (let d of daysList) {
-              if (poolItem.remaining < 2) break;
-              const currentDayCount = cells.filter(cell => cell.assigned && cell.day === d && cell.subject === subject).length;
-              if (currentDayCount > 0) continue;
-
-              // Check pairs of blocks in a randomized order to prevent double lessons always starting in the 1st slot
-              const pairIndices = Array.from({ length: clsBlocks.length - 1 }, (_, index) => index);
-              const randomizedPairs = shuffleArray(pairIndices);
-
-              for (let i of randomizedPairs) {
-                const b1 = clsBlocks[i];
-                const b2 = clsBlocks[i + 1];
-                const c1 = cells.find(c => c.day === d && c.block.id === b1.id);
-                const c2 = cells.find(c => c.day === d && c.block.id === b2.id);
-
-                if (c1 && !c1.assigned && c2 && !c2.assigned) {
-                  const availableTeacher = possibleTeachers.find(t => 
-                    isTeacherAvailable(t, d, c1.block) && 
-                    !hasTeacherConflict(t.id, d, c1.block) &&
-                    isTeacherAvailable(t, d, c2.block) && 
-                    !hasTeacherConflict(t.id, d, c2.block) &&
-                    getTeacherAssignedHours(t.id) + 1 < (t.workload_hours || 20)
-                  );
-
-                  if (availableTeacher) {
-                    c1.assigned = true;
-                    c1.subject = subject;
-                    c1.teacher_id = availableTeacher.id;
-
-                    c2.assigned = true;
-                    c2.subject = subject;
-                    c2.teacher_id = availableTeacher.id;
-
-                    poolItem.remaining -= 2;
-                    clsScheduled += 2;
-                    break;
-                  }
-                }
+              if (isTargetSpecialClass && (day === 'segunda' || day === 'quarta' || day === 'sexta')) {
+                if (i >= 5) continue;
+                if (m.size === 2 && i + 1 >= 5) continue;
               }
-            }
-          }
 
-          // --- Phase 2: Spread single lessons across days with 0 lessons of this subject ---
-          if (poolItem.remaining > 0) {
-            for (let d of daysList) {
-              if (poolItem.remaining <= 0) break;
-              const currentDayCount = cells.filter(cell => cell.assigned && cell.day === d && cell.subject === subject).length;
-              if (currentDayCount > 0) continue;
-
-              // Shuffle cells order to distribute subjects organically throughout the hours of the day
-              const randomizedCells = shuffleArray(cells);
-              for (let c of randomizedCells) {
-                if (c.day !== d || c.assigned) continue;
-                const availableTeacher = possibleTeachers.find(t => 
-                  isTeacherAvailable(t, c.day, c.block) && 
-                  !hasTeacherConflict(t.id, c.day, c.block) &&
-                  getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
-                );
-
-                if (availableTeacher) {
-                  c.assigned = true;
-                  c.subject = subject;
-                  c.teacher_id = availableTeacher.id;
-                  poolItem.remaining--;
-                  clsScheduled++;
-                  break;
-                }
-              }
-            }
-          }
-
-          // --- Phase 3: Fill remaining up to MAX 2 LESSONS PER DAY on days with 1 lesson ---
-          if (poolItem.remaining > 0) {
-            for (let d of daysList) {
-              if (poolItem.remaining <= 0) break;
-              const currentDayCount = cells.filter(cell => cell.assigned && cell.day === d && cell.subject === subject).length;
-              if (currentDayCount >= 2) continue; // STRICT MAX 2 LESSONS PER DAY
-
-              const randomizedCells = shuffleArray(cells);
-              for (let c of randomizedCells) {
-                if (c.day !== d || c.assigned) continue;
-                const availableTeacher = possibleTeachers.find(t => 
-                  isTeacherAvailable(t, c.day, c.block) && 
-                  !hasTeacherConflict(t.id, c.day, c.block) &&
-                  getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
-                );
-
-                if (availableTeacher) {
-                  c.assigned = true;
-                  c.subject = subject;
-                  c.teacher_id = availableTeacher.id;
-                  poolItem.remaining--;
-                  clsScheduled++;
-                  break;
-                }
-              }
-            }
-          }
-
-          // --- Phase 4: Fallback Fill pass if any unassigned slots exist ---
-          if (poolItem.remaining > 0) {
-            const randomizedCells = shuffleArray(cells);
-            for (let c of randomizedCells) {
-              if (poolItem.remaining <= 0) break;
-              if (c.assigned) continue;
-
-              const dayCount = cells.filter(cell => cell.assigned && cell.day === c.day && cell.subject === subject).length;
-              if (dayCount >= 2) continue;
-
-              const availableTeacher = possibleTeachers.find(t => 
-                isTeacherAvailable(t, c.day, c.block) && 
-                !hasTeacherConflict(t.id, c.day, c.block) &&
-                getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
+              const isSlot1Occupied = trialRunningSlots.some(s =>
+                s.class_id === cls.id &&
+                s.day_of_week === day &&
+                timesOverlap(s.start_time, s.end_time, b1.start_time, b1.end_time)
               );
+              if (isSlot1Occupied) continue;
 
-              if (availableTeacher) {
-                c.assigned = true;
-                c.subject = subject;
-                c.teacher_id = availableTeacher.id;
-                poolItem.remaining--;
-                clsScheduled++;
+              const hasTeacherConflict1 = trialRunningSlots.some(s =>
+                s.teacher_id === t.id &&
+                s.day_of_week === day &&
+                timesOverlap(s.start_time, s.end_time, b1.start_time, b1.end_time)
+              );
+              if (hasTeacherConflict1) continue;
+
+              if (!isTeacherAvailable(t, day, b1, clsBlocks)) continue;
+
+              if (m.size === 2) {
+                const b2 = clsBlocks[i + 1];
+                const isSlot2Occupied = trialRunningSlots.some(s =>
+                  s.class_id === cls.id &&
+                  s.day_of_week === day &&
+                  timesOverlap(s.start_time, s.end_time, b2.start_time, b2.end_time)
+                );
+                if (isSlot2Occupied) continue;
+
+                const hasTeacherConflict2 = trialRunningSlots.some(s =>
+                  s.teacher_id === t.id &&
+                  s.day_of_week === day &&
+                  timesOverlap(s.start_time, s.end_time, b2.start_time, b2.end_time)
+                );
+                if (hasTeacherConflict2) continue;
+
+                if (!isTeacherAvailable(t, day, b2, clsBlocks)) continue;
               }
+
+              const workloadRatio = currentHours / (t.workload_hours || 20);
+              const subjectDayScore = dayLessonsCount * 3;
+              const randomFactor = Math.random() * 0.2;
+              const score = workloadRatio * 15 + subjectDayScore + randomFactor;
+
+              candidates.push({
+                teacher: t,
+                day,
+                blockIndex: i,
+                score
+              });
             }
-          }
-
-          // --- Phase 5: Aggressive Force Allocation ---
-          if (poolItem.remaining > 0) {
-            const randomizedCells = shuffleArray(cells);
-            for (let c of randomizedCells) {
-              if (poolItem.remaining <= 0) break;
-              if (c.assigned) continue;
-
-              const availableTeacher = possibleTeachers.find(t => 
-                !hasTeacherConflict(t.id, c.day, c.block)
-              ) || rawPossibleTeachers[0];
-
-              if (availableTeacher) {
-                c.assigned = true;
-                c.subject = subject;
-                c.teacher_id = availableTeacher.id;
-                poolItem.remaining--;
-                clsScheduled++;
-              }
-            }
-          }
+          });
         });
 
-        trialScheduledOverall += clsScheduled;
-        trialClassResults.push({
-          classId: cls.id,
-          cells,
-          scheduled: clsScheduled,
-          demanded: clsDemanded
-        });
+        if (candidates.length > 0) {
+          candidates.sort((a, b) => a.score - b.score);
+          const best = candidates[0];
 
-        cells.filter(c => c.assigned).forEach(c => {
+          const b1 = clsBlocks[best.blockIndex];
           trialRunningSlots.push({
             id: crypto.randomUUID(),
             class_id: cls.id,
-            teacher_id: c.teacher_id,
-            subject: c.subject,
-            day_of_week: c.day,
-            start_time: c.block.start_time,
-            end_time: c.block.end_time
+            teacher_id: best.teacher.id,
+            subject: m.subject,
+            day_of_week: best.day,
+            start_time: b1.start_time,
+            end_time: b1.end_time
           });
-        });
+
+          if (m.size === 2) {
+            const b2 = clsBlocks[best.blockIndex + 1];
+            trialRunningSlots.push({
+              id: crypto.randomUUID(),
+              class_id: cls.id,
+              teacher_id: best.teacher.id,
+              subject: m.subject,
+              day_of_week: best.day,
+              start_time: b2.start_time,
+              end_time: b2.end_time
+            });
+          }
+
+          scheduledCount += m.size;
+        } else {
+          if (m.size === 2) {
+            meetingsPool.push({
+              id: crypto.randomUUID(),
+              classId: m.classId,
+              subject: m.subject,
+              size: 1
+            });
+            meetingsPool.push({
+              id: crypto.randomUUID(),
+              classId: m.classId,
+              subject: m.subject,
+              size: 1
+            });
+            sortPool();
+          }
+        }
       }
 
-      const totalDemanded = trialClassResults.reduce((s, r) => s + r.demanded, 0);
-      const score = (trialScheduledOverall * 1000) - ((totalDemanded - trialScheduledOverall) * 2000);
+      const trialScore = (scheduledCount * 1000) - ((totalDemanded - scheduledCount) * 2000);
+
+      const trialClassResults = targetClasses.map(c => {
+        let workloads = c.subject_workloads;
+        if (!workloads || Object.keys(workloads).length === 0) {
+          workloads = c.group === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
+                      c.group === 'anos_iniciais' ? DEFAULT_INICIAIS_WORKLOAD :
+                      c.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
+        }
+        const clsDemanded = Object.values(workloads).reduce((sum, h) => sum + h, 0);
+        const clsScheduled = trialRunningSlots.filter(s => s.class_id === c.id).length;
+        return {
+          classId: c.id,
+          scheduled: clsScheduled,
+          demanded: clsDemanded
+        };
+      });
 
       return {
-        trialScheduledOverall,
+        trialScheduledOverall: scheduledCount,
         totalDemanded,
-        score,
+        score: trialScore,
         trialRunningSlots,
         trialClassResults
       };
     };
 
-    // Run 50 randomized optimization trials to search for the best and most diverse layouts
+    // Run 100 randomized optimization trials to search for the best and most diverse layouts
     const trials: ReturnType<typeof runTrial>[] = [];
-    const numTrials = 50;
+    const numTrials = 100;
     for (let t = 0; t < numTrials; t++) {
       trials.push(runTrial(t));
     }
