@@ -1476,6 +1476,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
   const [cellTeacherId, setCellTeacherId] = useState('');
   const [cellSubject, setCellSubject] = useState('');
   const [draggedOverCell, setDraggedOverCell] = useState<{ day: DayOfWeek, blockId: string } | null>(null);
+  const [draggedSlotState, setDraggedSlotState] = useState<ScheduleSlot | null>(null);
 
   const checkSlotConflict = (slot: ScheduleSlot): { isConflict: boolean; reason: string; conflictingClasses: string[] } => {
     const conflictingSlots = scheduleSlots.filter(s => 
@@ -1616,6 +1617,11 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
     if (!isAdmin) return;
     e.dataTransfer.setData('application/json', JSON.stringify(slot));
     e.dataTransfer.effectAllowed = 'move';
+    setDraggedSlotState(slot);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedSlotState(null);
   };
 
   const handleDragOver = (e: React.DragEvent, day: DayOfWeek, block: TimeBlock) => {
@@ -1636,9 +1642,19 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
     setDraggedOverCell(null);
 
     try {
+      let draggedSlot: ScheduleSlot | null = null;
       const rawData = e.dataTransfer.getData('application/json');
-      if (!rawData) return;
-      const draggedSlot = JSON.parse(rawData) as ScheduleSlot;
+      if (rawData) {
+        try {
+          draggedSlot = JSON.parse(rawData) as ScheduleSlot;
+        } catch (err) {
+          console.warn('Error parsing JSON from dragEvent, using fallback state:', err);
+        }
+      }
+      if (!draggedSlot) {
+        draggedSlot = draggedSlotState;
+      }
+      if (!draggedSlot) return;
 
       // Only allow dropping inside the active class view
       if (draggedSlot.class_id !== selectedClassId) return;
@@ -3117,7 +3133,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                               ) : existingSlot ? (() => {
                                 const conflict = checkSlotConflict(existingSlot);
                                 return (
-                                  <div draggable={isAdmin} onDragStart={(e) => handleDragStart(e, existingSlot)} className={`flex flex-col items-center justify-center h-full min-h-[60px] p-2 rounded-lg border transition-all ${isAdmin ? 'cursor-grab active:cursor-grabbing hover:brightness-95' : ''} ${conflict.isConflict ? 'bg-red-100 border-red-500 text-red-950 shadow-md ring-2 ring-red-400 animate-pulse' : 'bg-emerald-50/60 border-emerald-200 text-slate-800'}`}>
+                                  <div draggable={isAdmin} onDragStart={(e) => handleDragStart(e, existingSlot)} onDragEnd={handleDragEnd} className={`flex flex-col items-center justify-center h-full min-h-[60px] p-2 rounded-lg border transition-all ${isAdmin ? 'cursor-grab active:cursor-grabbing hover:brightness-95' : ''} ${conflict.isConflict ? 'bg-red-100 border-red-500 text-red-950 shadow-md ring-2 ring-red-400 animate-pulse' : 'bg-emerald-50/60 border-emerald-200 text-slate-800'}`}>
                                     {conflict.isConflict && (
                                       <span title={conflict.reason} className="text-[9px] font-bold uppercase tracking-wider text-red-700 bg-red-200 px-1.5 py-0.5 rounded mb-0.5 flex items-center gap-0.5 cursor-help">
                                         ⚠️ Conflito
