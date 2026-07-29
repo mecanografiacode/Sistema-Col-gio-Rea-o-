@@ -1661,6 +1661,7 @@ class StorageService {
             name: c.name || 'Turma',
             "group": c.group || 'anos_iniciais',
             subject_workloads: c.subject_workloads || {},
+            shift: c.shift || 'ambos',
             created_at: c.created_at || new Date().toISOString()
           };
           await supabase.from('classes').upsert([payload]);
@@ -1967,6 +1968,7 @@ class StorageService {
           name: c.name || 'Turma',
           "group": c.group || 'anos_iniciais',
           subject_workloads: c.subject_workloads || {},
+          shift: c.shift || 'ambos',
           created_at: c.created_at || new Date().toISOString()
         };
         const { error } = await supabase.from('classes').upsert([payload]);

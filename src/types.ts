@@ -234,6 +234,7 @@ export interface SchoolClass {
   name: string;
   group: EducationalGroup;
   subject_workloads?: { [subject: string]: number };
+  shift?: Shift;
   created_at: string;
 }
 

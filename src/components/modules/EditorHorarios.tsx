@@ -5,6 +5,31 @@ import autoTable from 'jspdf-autotable';
 import { Plus, Trash2, Edit2, AlertCircle, Save, Download, CalendarClock, Wand2 } from 'lucide-react';
 import { storage } from '../../lib/storage';
 
+const normalizeTime = (t: string): string => {
+  if (!t) return '00:00';
+  const parts = t.split(':');
+  if (parts.length < 2) return '00:00';
+  const h = parts[0].padStart(2, '0');
+  const m = parts[1].padStart(2, '0');
+  return `${h}:${m}`;
+};
+
+const timesOverlap = (start1: string, end1: string, start2: string, end2: string): boolean => {
+  return normalizeTime(start1) < normalizeTime(end2) && normalizeTime(end1) > normalizeTime(start2);
+};
+
+const getClassShift = (c: SchoolClass): 'matutino' | 'vespertino' | 'ambos' => {
+  if (c.shift) return c.shift;
+  const upperName = c.name.toUpperCase().trim();
+  if (upperName.endsWith('A') || upperName.includes(' A ') || upperName.endsWith('-A')) {
+    return 'matutino';
+  }
+  if (upperName.endsWith('B') || upperName.includes(' B ') || upperName.endsWith('-B')) {
+    return 'vespertino';
+  }
+  return 'ambos';
+};
+
 const DEFAULT_INFANTIL_WORKLOAD = {};
 
 const DEFAULT_INICIAIS_WORKLOAD = {};
@@ -369,6 +394,15 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
     const defaultWorkload = newClassGroup === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
                             newClassGroup === 'anos_iniciais' ? DEFAULT_INICIAIS_WORKLOAD :
                             newClassGroup === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
+    
+    const upperName = newClassName.toUpperCase().trim();
+    let inferredShift: 'matutino' | 'vespertino' | 'ambos' = 'ambos';
+    if (upperName.endsWith('A') || upperName.includes(' A ') || upperName.endsWith('-A')) {
+      inferredShift = 'matutino';
+    } else if (upperName.endsWith('B') || upperName.includes(' B ') || upperName.endsWith('-B')) {
+      inferredShift = 'vespertino';
+    }
+
     setClasses([
       ...classes,
       {
@@ -376,6 +410,7 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
         name: newClassName,
         group: newClassGroup,
         subject_workloads: { ...defaultWorkload },
+        shift: inferredShift,
         created_at: new Date().toISOString()
       }
     ]);
@@ -504,9 +539,21 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {classes.map(c => (
-                <tr key={c.id} className={`hover:bg-slate-50/50 ${editingClassId === c.id ? 'bg-red-50/40 hover:bg-red-50/50' : ''}`}>
-                  <td className="px-4 py-3 font-semibold text-slate-800">{c.name}</td>
+              {classes.map(c => {
+                const shift = getClassShift(c);
+                const shiftLabel = shift === 'matutino' ? 'Matutino' : shift === 'vespertino' ? 'Vespertino' : 'Ambos';
+                const shiftBadgeColor = shift === 'matutino' ? 'bg-amber-50 text-amber-700 border-amber-100' : shift === 'vespertino' ? 'bg-blue-50 text-blue-700 border-blue-100' : 'bg-slate-50 text-slate-600 border-slate-100';
+
+                return (
+                  <tr key={c.id} className={`hover:bg-slate-50/50 ${editingClassId === c.id ? 'bg-red-50/40 hover:bg-red-50/50' : ''}`}>
+                    <td className="px-4 py-3 font-semibold text-slate-800">
+                      <div className="flex flex-col">
+                        <span>{c.name}</span>
+                        <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded border mt-1 font-semibold w-max ${shiftBadgeColor}`}>
+                          Turno: {shiftLabel}
+                        </span>
+                      </div>
+                    </td>
                   <td className="px-4 py-3">
                     <span className="bg-slate-100 text-slate-600 text-xs px-2 py-1 rounded-md font-medium">
                       {groupLabels[c.group]}
@@ -539,7 +586,8 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
                     </div>
                   </td>
                 </tr>
-              ))}
+              );
+            })}
               {classes.length === 0 && (
                 <tr>
                   <td colSpan={4} className="px-4 py-8 text-center text-slate-500">Nenhuma turma cadastrada.</td>
@@ -672,24 +720,42 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
   // Automatically populate 6 default time blocks with intervals if none exist for this class
   useEffect(() => {
     if (!selectedClassId) return;
+    const currentClass = classes.find(c => c.id === selectedClassId);
+    if (!currentClass) return;
+    const isAfternoon = getClassShift(currentClass) === 'vespertino';
+
     setTimeBlocks(prev => {
       const existing = prev.filter(tb => tb.class_id === selectedClassId);
       if (existing.length === 0) {
-        return [
-          ...prev,
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '07:20', end_time: '08:10' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '08:10', end_time: '09:00' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:00', end_time: '09:20', is_interval: true },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:20', end_time: '10:10' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '10:10', end_time: '11:00' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:00', end_time: '11:20', is_interval: true },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:20', end_time: '12:10' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '12:10', end_time: '13:00' }
-        ];
+        if (isAfternoon) {
+          return [
+            ...prev,
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '13:10', end_time: '14:00' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '14:00', end_time: '14:50' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '14:50', end_time: '15:10', is_interval: true },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '15:10', end_time: '16:00' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '16:00', end_time: '16:50' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '16:50', end_time: '17:10', is_interval: true },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '17:10', end_time: '18:00' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '18:00', end_time: '18:50' }
+          ];
+        } else {
+          return [
+            ...prev,
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '07:20', end_time: '08:10' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '08:10', end_time: '09:00' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:00', end_time: '09:20', is_interval: true },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:20', end_time: '10:10' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '10:10', end_time: '11:00' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:00', end_time: '11:20', is_interval: true },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:20', end_time: '12:10' },
+            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '12:10', end_time: '13:00' }
+          ];
+        }
       }
       return prev;
     });
-  }, [selectedClassId, setTimeBlocks]);
+  }, [selectedClassId, classes, setTimeBlocks]);
 
   const classTimeBlocks = timeBlocks.filter(tb => tb.class_id === selectedClassId)
     .sort((a, b) => a.start_time.localeCompare(b.start_time));
@@ -747,9 +813,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       const hasConflictInOthers = otherClassesSlots.some(s => 
         s.teacher_id === teacherId && 
         s.day_of_week === day &&
-        ((block.start_time >= s.start_time && block.start_time < s.end_time) || 
-         (block.end_time > s.start_time && block.end_time <= s.end_time) ||
-         (block.start_time <= s.start_time && block.end_time >= s.end_time))
+        timesOverlap(block.start_time, block.end_time, s.start_time, s.end_time)
       );
       if (hasConflictInOthers) return true;
 
@@ -758,9 +822,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         c.assigned && 
         c.teacher_id === teacherId && 
         c.day === day &&
-        ((block.start_time >= c.block.start_time && block.start_time < c.block.end_time) || 
-         (block.end_time > c.block.start_time && block.end_time <= c.block.end_time) ||
-         (block.start_time <= c.block.start_time && block.end_time >= c.block.end_time))
+        timesOverlap(block.start_time, block.end_time, c.block.start_time, c.block.end_time)
       );
       return hasConflictInCurrent;
     };
@@ -768,11 +830,18 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     // Helper to check if a teacher is available on a specific day & shift
     const isTeacherAvailable = (teacher: Teacher, day: DayOfWeek, block: TimeBlock) => {
       if (!teacher.available_days?.includes(day)) return false;
-      const startHour = parseInt(block.start_time.split(':')[0]);
+      const startHour = parseInt(normalizeTime(block.start_time).split(':')[0]);
       const isMorning = startHour < 13;
       if (teacher.availability_shift === 'matutino' && !isMorning) return false;
       if (teacher.availability_shift === 'vespertino' && isMorning) return false;
       return true;
+    };
+
+    // Helper to calculate teacher's total assigned hours (in other classes + currently scheduled in this run)
+    const getTeacherAssignedHours = (teacherId: string) => {
+      const otherClassesHours = otherClassesSlots.filter(s => s.teacher_id === teacherId).length;
+      const currentRunHours = cells.filter(c => c.assigned && c.teacher_id === teacherId).length;
+      return otherClassesHours + currentRunHours;
     };
 
     // Sort subjects by difficulty (fewer possible teachers first, then more remaining lessons)
@@ -801,7 +870,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       while (poolItem.remaining > 0) {
         let placed = false;
 
-        // Pass 1: Try to place with daily frequency limit (< 2 lessons/day) and a conflict-free teacher
+        // Pass 1: Try to place with daily frequency limit (< 2 lessons/day), workload-compliant, and conflict-free teacher
         for (let c of cells) {
           if (c.assigned) continue;
 
@@ -809,7 +878,9 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           if (dailyCount >= 2) continue;
 
           const availableTeacher = possibleTeachers.find(t => 
-            isTeacherAvailable(t, c.day, c.block) && !hasTeacherConflict(t.id, c.day, c.block)
+            isTeacherAvailable(t, c.day, c.block) && 
+            !hasTeacherConflict(t.id, c.day, c.block) &&
+            getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
           );
 
           if (availableTeacher) {
@@ -825,12 +896,14 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
 
         if (placed) continue;
 
-        // Pass 2: Relax daily count constraint (allow >= 2 lessons/day if needed), but still require an available teacher
+        // Pass 2: Relax daily count constraint (allow >= 2 lessons/day if needed), but still require an available, workload-compliant, conflict-free teacher
         for (let c of cells) {
           if (c.assigned) continue;
 
           const availableTeacher = possibleTeachers.find(t => 
-            isTeacherAvailable(t, c.day, c.block) && !hasTeacherConflict(t.id, c.day, c.block)
+            isTeacherAvailable(t, c.day, c.block) && 
+            !hasTeacherConflict(t.id, c.day, c.block) &&
+            getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
           );
 
           if (availableTeacher) {
@@ -937,25 +1010,29 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
   };
 
   const handleAddTimeBlock = () => {
+    const currentClass = classes.find(c => c.id === selectedClassId);
+    const isAfternoon = currentClass ? getClassShift(currentClass) === 'vespertino' : false;
     setTimeBlocks([
       ...timeBlocks,
       {
         id: crypto.randomUUID(),
         class_id: selectedClassId,
-        start_time: '07:30',
-        end_time: '08:20'
+        start_time: isAfternoon ? '13:10' : '07:30',
+        end_time: isAfternoon ? '14:00' : '08:20'
       }
     ]);
   };
 
   const handleAddIntervalBlock = () => {
+    const currentClass = classes.find(c => c.id === selectedClassId);
+    const isAfternoon = currentClass ? getClassShift(currentClass) === 'vespertino' : false;
     setTimeBlocks([
       ...timeBlocks,
       {
         id: crypto.randomUUID(),
         class_id: selectedClassId,
-        start_time: '09:00',
-        end_time: '09:20',
+        start_time: isAfternoon ? '14:50' : '09:00',
+        end_time: isAfternoon ? '15:10' : '09:20',
         is_interval: true
       }
     ]);
@@ -968,20 +1045,37 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     // Remove slots of this class
     setScheduleSlots(slots => slots.filter(s => s.class_id !== selectedClassId));
     
+    const currentClass = classes.find(c => c.id === selectedClassId);
+    const isAfternoon = currentClass ? getClassShift(currentClass) === 'vespertino' : false;
+
     // Set default blocks with intervals
     setTimeBlocks(prev => {
       const filtered = prev.filter(tb => tb.class_id !== selectedClassId);
-      return [
-        ...filtered,
-        { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '07:20', end_time: '08:10' },
-        { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '08:10', end_time: '09:00' },
-        { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:00', end_time: '09:20', is_interval: true },
-        { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:20', end_time: '10:10' },
-        { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '10:10', end_time: '11:00' },
-        { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:00', end_time: '11:20', is_interval: true },
-        { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:20', end_time: '12:10' },
-        { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '12:10', end_time: '13:00' }
-      ];
+      if (isAfternoon) {
+        return [
+          ...filtered,
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '13:10', end_time: '14:00' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '14:00', end_time: '14:50' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '14:50', end_time: '15:10', is_interval: true },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '15:10', end_time: '16:00' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '16:00', end_time: '16:50' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '16:50', end_time: '17:10', is_interval: true },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '17:10', end_time: '18:00' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '18:00', end_time: '18:50' }
+        ];
+      } else {
+        return [
+          ...filtered,
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '07:20', end_time: '08:10' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '08:10', end_time: '09:00' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:00', end_time: '09:20', is_interval: true },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:20', end_time: '10:10' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '10:10', end_time: '11:00' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:00', end_time: '11:20', is_interval: true },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:20', end_time: '12:10' },
+          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '12:10', end_time: '13:00' }
+        ];
+      }
     });
   };
 
@@ -1060,9 +1154,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         s.teacher_id === cellTeacherId && 
         s.day_of_week === day &&
         !(s.class_id === selectedClassId && s.day_of_week === day && s.start_time === block.start_time && s.end_time === block.end_time) &&
-        ((block.start_time >= s.start_time && block.start_time < s.end_time) || 
-         (block.end_time > s.start_time && block.end_time <= s.end_time) ||
-         (block.start_time <= s.start_time && block.end_time >= s.end_time))
+        timesOverlap(block.start_time, block.end_time, s.start_time, s.end_time)
       );
 
       if (conflict) {
