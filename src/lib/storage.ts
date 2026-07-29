@@ -1774,13 +1774,21 @@ class StorageService {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        const ids = uniqueSlots.map(s => ensureValidUuid(s.id));
-        if (ids.length > 0) {
-          const idsString = ids.map(id => `'${id}'`).join(',');
-          await supabase.from('schedule_slots').delete().not('id', 'in', `(${idsString})`);
-        } else {
+        const activeIds = uniqueSlots.map(s => ensureValidUuid(s.id));
+        
+        // Retrieve all existing slot IDs from Supabase to find orphaned ones
+        const { data: existingRows, error: fetchErr } = await supabase.from('schedule_slots').select('id');
+        if (!fetchErr && existingRows) {
+          const existingIds = existingRows.map((r: any) => r.id);
+          const idsToDelete = existingIds.filter((id: string) => !activeIds.includes(id));
+          if (idsToDelete.length > 0) {
+            await supabase.from('schedule_slots').delete().in('id', idsToDelete);
+          }
+        } else if (activeIds.length === 0) {
+          // If fetch failed or we have no active slots, do a general fallback clear
           await supabase.from('schedule_slots').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         }
+
         // Upsert current slots
         for (const s of uniqueSlots) {
           const payload = {
@@ -1802,24 +1810,53 @@ class StorageService {
 
   // --- TIME BLOCKS ---
   public async getTimeBlocks(): Promise<any[]> {
-    return this.fetchFromSupabaseOrCache<any>('time_blocks', 'cr_time_blocks', [], 'start_time', true);
+    const blocks = await this.fetchFromSupabaseOrCache<any>('time_blocks', 'cr_time_blocks', [], 'start_time', true);
+    // Deduplicate blocks by class_id + start_time to prevent any accumulation of duplicate records
+    const seen = new Set<string>();
+    const uniqueBlocks: any[] = [];
+    for (const b of blocks) {
+      const key = `${b.class_id || 'all'}_${b.start_time || '07:15'}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueBlocks.push(b);
+      }
+    }
+    return uniqueBlocks;
   }
 
   public async saveTimeBlocks(blocks: any[]): Promise<void> {
-    this.setItem('cr_time_blocks', blocks);
+    // Deduplicate blocks before saving to avoid duplicate accumulation in local cache and DB
+    const seen = new Set<string>();
+    const uniqueBlocks: any[] = [];
+    for (const b of blocks) {
+      const key = `${b.class_id || 'all'}_${b.start_time || '07:15'}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueBlocks.push(b);
+      }
+    }
+
+    this.setItem('cr_time_blocks', uniqueBlocks);
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        // Delete blocks that are no longer in the list
-        const ids = blocks.map(b => ensureValidUuid(b.id));
-        if (ids.length > 0) {
-          const idsString = ids.map(id => `'${id}'`).join(',');
-          await supabase.from('time_blocks').delete().not('id', 'in', `(${idsString})`);
-        } else {
+        const activeIds = uniqueBlocks.map(b => ensureValidUuid(b.id));
+        
+        // Retrieve all existing time_blocks IDs from Supabase to find orphaned ones
+        const { data: existingRows, error: fetchErr } = await supabase.from('time_blocks').select('id');
+        if (!fetchErr && existingRows) {
+          const existingIds = existingRows.map((r: any) => r.id);
+          const idsToDelete = existingIds.filter((id: string) => !activeIds.includes(id));
+          if (idsToDelete.length > 0) {
+            await supabase.from('time_blocks').delete().in('id', idsToDelete);
+          }
+        } else if (activeIds.length === 0) {
+          // General fallback clear
           await supabase.from('time_blocks').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         }
+
         // Upsert current blocks
-        for (const tb of blocks) {
+        for (const tb of uniqueBlocks) {
           const payload = {
             id: ensureValidUuid(tb.id),
             class_id: toValidUuidOrNull(tb.class_id),

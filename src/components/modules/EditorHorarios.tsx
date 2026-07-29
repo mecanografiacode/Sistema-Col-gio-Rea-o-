@@ -1766,10 +1766,10 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         { id: crypto.randomUUID(), class_id: cls.id, start_time: '13:30', end_time: '14:20', is_interval: false },
         { id: crypto.randomUUID(), class_id: cls.id, start_time: '14:20', end_time: '15:10', is_interval: false },
         { id: crypto.randomUUID(), class_id: cls.id, start_time: '15:10', end_time: '16:00', is_interval: false },
-        { id: crypto.randomUUID(), class_id: cls.id, start_time: '16:00', end_time: '16:15', is_interval: true },
-        { id: crypto.randomUUID(), class_id: cls.id, start_time: '16:15', end_time: '17:05', is_interval: false },
-        { id: crypto.randomUUID(), class_id: cls.id, start_time: '17:05', end_time: '17:55', is_interval: false },
-        { id: crypto.randomUUID(), class_id: cls.id, start_time: '17:55', end_time: '18:45', is_interval: false }
+        { id: crypto.randomUUID(), class_id: cls.id, start_time: '16:00', end_time: '16:20', is_interval: true },
+        { id: crypto.randomUUID(), class_id: cls.id, start_time: '16:20', end_time: '17:10', is_interval: false },
+        { id: crypto.randomUUID(), class_id: cls.id, start_time: '17:10', end_time: '18:00', is_interval: false },
+        { id: crypto.randomUUID(), class_id: cls.id, start_time: '18:00', end_time: '18:50', is_interval: false }
       ] : [
         { id: crypto.randomUUID(), class_id: cls.id, start_time: '07:15', end_time: '08:05', is_interval: false },
         { id: crypto.randomUUID(), class_id: cls.id, start_time: '08:05', end_time: '08:55', is_interval: false },
@@ -2259,10 +2259,10 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
             { id: crypto.randomUUID(), class_id: c.id, start_time: '13:30', end_time: '14:20', is_interval: false },
             { id: crypto.randomUUID(), class_id: c.id, start_time: '14:20', end_time: '15:10', is_interval: false },
             { id: crypto.randomUUID(), class_id: c.id, start_time: '15:10', end_time: '16:00', is_interval: false },
-            { id: crypto.randomUUID(), class_id: c.id, start_time: '16:00', end_time: '16:15', is_interval: true },
-            { id: crypto.randomUUID(), class_id: c.id, start_time: '16:15', end_time: '17:05', is_interval: false },
-            { id: crypto.randomUUID(), class_id: c.id, start_time: '17:05', end_time: '17:55', is_interval: false },
-            { id: crypto.randomUUID(), class_id: c.id, start_time: '17:55', end_time: '18:45', is_interval: false }
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '16:00', end_time: '16:20', is_interval: true },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '16:20', end_time: '17:10', is_interval: false },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '17:10', end_time: '18:00', is_interval: false },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '18:00', end_time: '18:50', is_interval: false }
           );
         } else {
           newBlocks.push(
