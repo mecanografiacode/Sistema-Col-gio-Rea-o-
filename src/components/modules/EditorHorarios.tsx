@@ -333,7 +333,7 @@ function TeacherManager({ teachers, setTeachers, subjects }: { teachers: Teacher
           
           <button
             onClick={addTeacher}
-            disabled={!newTeacherName.trim() || !newTeacherSubjects.trim() || newTeacherDays.length === 0 || newTeacherGroups.length === 0}
+            disabled={!newTeacherName.trim() || newTeacherSubjects.length === 0 || newTeacherDays.length === 0 || newTeacherGroups.length === 0}
             className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center h-[42px] shrink-0"
           >
             <Plus className="w-4 h-4 mr-2" />
