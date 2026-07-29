@@ -1473,41 +1473,238 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
   // Cell edit state
   const [cellTeacherId, setCellTeacherId] = useState('');
   const [cellSubject, setCellSubject] = useState('');
+  const [draggedOverCell, setDraggedOverCell] = useState<{ day: DayOfWeek, blockId: string } | null>(null);
 
-  const checkSlotConflict = (slot: ScheduleSlot): { isConflict: boolean; conflictingClasses: string[] } => {
+  const checkSlotConflict = (slot: ScheduleSlot): { isConflict: boolean; reason: string; conflictingClasses: string[] } => {
     const conflictingSlots = scheduleSlots.filter(s => 
       s.id !== slot.id &&
       s.teacher_id === slot.teacher_id &&
       s.day_of_week === slot.day_of_week &&
       timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)
     );
-    if (conflictingSlots.length === 0) return { isConflict: false, conflictingClasses: [] };
-    const conflictingClassIds = Array.from(new Set(conflictingSlots.map(s => s.class_id)));
-    const conflictingClasses = conflictingClassIds.map(cid => classes.find(c => c.id === cid)?.name || 'Outra Turma');
-    return { isConflict: true, conflictingClasses };
+
+    const teacher = teachers.find(t => t.id === slot.teacher_id);
+    let reason = '';
+    const dayMap: Record<string, string> = {
+      segunda: 'Segunda-feira',
+      terca: 'Terça-feira',
+      quarta: 'Quarta-feira',
+      quinta: 'Quinta-feira',
+      sexta: 'Sexta-feira'
+    };
+    const dayLabel = dayMap[slot.day_of_week] || slot.day_of_week;
+
+    if (teacher) {
+      // 1. Check availability days
+      if (teacher.available_days && teacher.available_days.length > 0 && !teacher.available_days.includes(slot.day_of_week)) {
+        reason = `Indisponibilidade: ${teacher.name} não trabalha na ${dayLabel}.`;
+      }
+      
+      // 2. Check shift availability
+      const slotHour = parseInt(slot.start_time.split(':')[0] || '0', 10);
+      const slotShift = slotHour >= 12 ? 'vespertino' : 'matutino';
+      if (teacher.availability_shift && teacher.availability_shift !== 'ambos' && teacher.availability_shift !== slotShift) {
+        const shiftReason = `Indisponibilidade: ${teacher.name} trabalha apenas no turno ${teacher.availability_shift} (esta aula é no ${slotShift}).`;
+        reason = reason ? `${reason} | ${shiftReason}` : shiftReason;
+      }
+    }
+
+    if (conflictingSlots.length > 0) {
+      const conflictingClassIds = Array.from(new Set(conflictingSlots.map(s => s.class_id)));
+      const conflictingClasses = conflictingClassIds.map(cid => classes.find(c => c.id === cid)?.name || 'Outra Turma');
+      const conflictReason = `Choque de Horário: Professor já alocado na(s) turma(s) ${conflictingClasses.join(', ')} neste horário.`;
+      return { 
+        isConflict: true, 
+        reason: reason ? `${conflictReason} | ${reason}` : conflictReason, 
+        conflictingClasses 
+      };
+    }
+
+    if (reason) {
+      return { isConflict: true, reason, conflictingClasses: [] };
+    }
+
+    return { isConflict: false, reason: '', conflictingClasses: [] };
   };
 
   useEffect(() => {
-    if (scheduleSlots.length === 0) return;
     const allConflicts: string[] = [];
     scheduleSlots.forEach(slot => {
-      const { isConflict, conflictingClasses } = checkSlotConflict(slot);
+      const { isConflict, reason, conflictingClasses } = checkSlotConflict(slot);
       if (isConflict) {
         const clsName = classes.find(c => c.id === slot.class_id)?.name || 'Turma';
         const teacherName = teachers.find(t => t.id === slot.teacher_id)?.name || 'Professor';
-        allConflicts.push(`Conflito: ${teacherName} alocado em ${clsName} e ${conflictingClasses.join(', ')} na ${slot.day_of_week} (${slot.start_time} - ${slot.end_time})`);
+        allConflicts.push(`[${clsName}] Conflito com ${teacherName}: ${reason}`);
       }
     });
 
     if (allConflicts.length > 0) {
       const uniqueConflicts = Array.from(new Set(allConflicts));
       setScheduleStatus({
-        message: `⚠️ Atenção: Detectado(s) ${uniqueConflicts.length} conflito(s) de horário entre professores! As células conflitantes estão destacadas em vermelho na grade.`,
+        message: `⚠️ Atenção: Detectado(s) ${uniqueConflicts.length} conflito(s) de horário ou disponibilidade! As células afetadas estão destacadas em vermelho.`,
         type: 'warning',
-        details: uniqueConflicts.slice(0, 5)
+        details: uniqueConflicts.slice(0, 10)
+      });
+    } else {
+      // Clear warning if it was a conflict warning
+      setScheduleStatus(prev => {
+        if (prev?.type === 'warning' && (prev.message.includes('conflito') || prev.message.includes('Atenção: Detectado'))) {
+          return null;
+        }
+        return prev;
       });
     }
   }, [scheduleSlots, teachers, classes]);
+
+  // --- HTML5 DRAG & DROP HANDLERS ---
+  const handleDragStart = (e: React.DragEvent, slot: ScheduleSlot) => {
+    if (!isAdmin) return;
+    e.dataTransfer.setData('application/json', JSON.stringify(slot));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, day: DayOfWeek, block: TimeBlock) => {
+    if (!isAdmin || block.is_interval) return;
+    e.preventDefault();
+    if (draggedOverCell?.day !== day || draggedOverCell?.blockId !== block.id) {
+      setDraggedOverCell({ day, blockId: block.id });
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDraggedOverCell(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetDay: DayOfWeek, targetBlock: TimeBlock) => {
+    if (!isAdmin || targetBlock.is_interval) return;
+    e.preventDefault();
+    setDraggedOverCell(null);
+
+    try {
+      const rawData = e.dataTransfer.getData('application/json');
+      if (!rawData) return;
+      const draggedSlot = JSON.parse(rawData) as ScheduleSlot;
+
+      // Only allow dropping inside the active class view
+      if (draggedSlot.class_id !== selectedClassId) return;
+
+      const targetSlot = scheduleSlots.find(
+        s => s.class_id === selectedClassId && 
+        s.day_of_week === targetDay && 
+        s.start_time === targetBlock.start_time && 
+        s.end_time === targetBlock.end_time
+      );
+
+      let updatedSlots = [...scheduleSlots];
+
+      if (targetSlot) {
+        // SWAP both slots
+        updatedSlots = updatedSlots.map(s => {
+          if (s.id === draggedSlot.id) {
+            return {
+              ...s,
+              day_of_week: targetDay,
+              start_time: targetBlock.start_time,
+              end_time: targetBlock.end_time
+            };
+          }
+          if (s.id === targetSlot.id) {
+            return {
+              ...s,
+              day_of_week: draggedSlot.day_of_week,
+              start_time: draggedSlot.start_time,
+              end_time: draggedSlot.end_time
+            };
+          }
+          return s;
+        });
+      } else {
+        // MOVE dragged slot to empty cell
+        updatedSlots = updatedSlots.map(s => {
+          if (s.id === draggedSlot.id) {
+            return {
+              ...s,
+              day_of_week: targetDay,
+              start_time: targetBlock.start_time,
+              end_time: targetBlock.end_time
+            };
+          }
+          return s;
+        });
+      }
+
+      // Check for conflicts after this specific operation to give instant feedback
+      const checkConflictsForList = (slots: ScheduleSlot[]) => {
+        const list: string[] = [];
+        slots.forEach(slot => {
+          // Inner check similar to checkSlotConflict but local to current list
+          const conflictingSlots = slots.filter(s => 
+            s.id !== slot.id &&
+            s.teacher_id === slot.teacher_id &&
+            s.day_of_week === slot.day_of_week &&
+            timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)
+          );
+
+          const teacher = teachers.find(t => t.id === slot.teacher_id);
+          let reason = '';
+          const dayMap: Record<string, string> = {
+            segunda: 'Segunda-feira',
+            terca: 'Terça-feira',
+            quarta: 'Quarta-feira',
+            quinta: 'Quinta-feira',
+            sexta: 'Sexta-feira'
+          };
+          const dayLabel = dayMap[slot.day_of_week] || slot.day_of_week;
+
+          if (teacher) {
+            if (teacher.available_days && teacher.available_days.length > 0 && !teacher.available_days.includes(slot.day_of_week)) {
+              reason = `Indisponibilidade: ${teacher.name} não trabalha na ${dayLabel}.`;
+            }
+            const slotHour = parseInt(slot.start_time.split(':')[0] || '0', 10);
+            const slotShift = slotHour >= 12 ? 'vespertino' : 'matutino';
+            if (teacher.availability_shift && teacher.availability_shift !== 'ambos' && teacher.availability_shift !== slotShift) {
+              const shiftReason = `Indisponibilidade: ${teacher.name} trabalha apenas no turno ${teacher.availability_shift} (esta aula é no ${slotShift}).`;
+              reason = reason ? `${reason} | ${shiftReason}` : shiftReason;
+            }
+          }
+
+          if (conflictingSlots.length > 0) {
+            const conflictingClassIds = Array.from(new Set(conflictingSlots.map(s => s.class_id)));
+            const conflictingClasses = conflictingClassIds.map(cid => classes.find(c => c.id === cid)?.name || 'Outra Turma');
+            const conflictReason = `Choque de Horário: Professor já alocado na(s) turma(s) ${conflictingClasses.join(', ')} neste horário.`;
+            list.push(`[${classes.find(c => c.id === slot.class_id)?.name || 'Turma'}] ${reason ? `${conflictReason} | ${reason}` : conflictReason}`);
+          } else if (reason) {
+            list.push(`[${classes.find(c => c.id === slot.class_id)?.name || 'Turma'}] ${reason}`);
+          }
+        });
+        return Array.from(new Set(list));
+      };
+
+      const newConflicts = checkConflictsForList(updatedSlots);
+
+      setScheduleSlots(updatedSlots);
+      await storage.saveScheduleSlots(updatedSlots);
+
+      if (newConflicts.length > 0) {
+        setScheduleStatus({
+          message: `⚠️ Movimento realizado, mas gerou conflito!`,
+          type: 'warning',
+          details: newConflicts
+        });
+      } else {
+        setScheduleStatus({
+          message: targetSlot 
+            ? `🔄 Horários trocados com sucesso sem conflitos!`
+            : `📍 Horário movido com sucesso sem conflitos!`,
+          type: 'success',
+          details: [`A alteração foi persistida com sucesso.`]
+        });
+      }
+
+    } catch (err) {
+      console.error('Error during drag & drop drop handling:', err);
+    }
+  };
 
   // Time blocks are now strictly created/managed upon user request (e.g. clicking Organizar Automaticamente or manual addition)
   const classTimeBlocks = timeBlocks
@@ -1587,6 +1784,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     setTimeBlocks(activeTimeBlocks);
     await storage.saveTimeBlocks(activeTimeBlocks);
 
+    let aiErrorToDisplay = '';
     // Try calling Gemini AI API for schedule generation first
     try {
       const response = await fetch('/api/schedule/generate-ai', {
@@ -1600,6 +1798,9 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         })
       });
       const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `Erro de servidor (Código: ${response.status})`);
+      }
       if (data.success && data.slots && Array.isArray(data.slots) && data.slots.length > 0) {
         const aiSlots: ScheduleSlot[] = data.slots.map((s: any) => ({
           id: s.id || crypto.randomUUID(),
@@ -1621,9 +1822,12 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           details: [`Turmas processadas: ${targetClasses.length}`, `Total de aulas alocadas pela IA: ${aiSlots.length}`, `Sem conflitos de professores ou horários.`]
         });
         return;
+      } else {
+        throw new Error(data.error || "A Inteligência Artificial retornou uma estrutura vazia ou inválida.");
       }
-    } catch (aiErr) {
+    } catch (aiErr: any) {
       console.warn('AI schedule generation failed, falling back to local optimization algorithm:', aiErr);
+      aiErrorToDisplay = aiErr?.message || 'Erro de conexão/comunicação com a IA';
     }
 
     let totalDemandedOverall = 0;
@@ -1993,15 +2197,26 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
 
     if (scheduledWithTeacherOverall === totalDemandedOverall) {
       setScheduleStatus({
-        message: `Sucesso! Grade horária organizada com 100% de aproveitamento (${scheduledWithTeacherOverall}/${totalDemandedOverall} aulas) para ${targetClasses.length} turma(s).`,
-        type: 'success',
-        details: [`Total de turmas processadas: ${targetClasses.length}`, `Total de aulas agendadas: ${scheduledWithTeacherOverall}`, `Sem conflitos de professores ou horários.`]
+        message: aiErrorToDisplay 
+          ? `Grade organizada pelo Gerador Local (${scheduledWithTeacherOverall}/${totalDemandedOverall} aulas) devido à falha na conexão da IA.`
+          : `Sucesso! Grade horária organizada com 100% de aproveitamento (${scheduledWithTeacherOverall}/${totalDemandedOverall} aulas) para ${targetClasses.length} turma(s).`,
+        type: aiErrorToDisplay ? 'warning' : 'success',
+        details: aiErrorToDisplay 
+          ? [
+              `Motivo do fallback da IA: "${aiErrorToDisplay}"`,
+              `Total de turmas processadas localmente: ${targetClasses.length}`,
+              `Total de aulas agendadas localmente: ${scheduledWithTeacherOverall}`
+            ]
+          : [`Total de turmas processadas: ${targetClasses.length}`, `Total de aulas agendadas: ${scheduledWithTeacherOverall}`, `Sem conflitos de professores ou horários.`]
       });
     } else {
       setScheduleStatus({
-        message: `Organização concluída: ${scheduledWithTeacherOverall} de ${totalDemandedOverall} aulas foram agendadas sem conflitos.`,
+        message: aiErrorToDisplay
+          ? `Geração local concluída: ${scheduledWithTeacherOverall} de ${totalDemandedOverall} aulas agendadas (A IA falhou).`
+          : `Organização concluída: ${scheduledWithTeacherOverall} de ${totalDemandedOverall} aulas foram agendadas sem conflitos.`,
         type: 'warning',
         details: [
+          ...(aiErrorToDisplay ? [`Falha da IA Gemini: "${aiErrorToDisplay}"`] : []),
           `Turmas processadas: ${targetClasses.length}`,
           `Aulas com professor: ${scheduledWithTeacherOverall} de ${totalDemandedOverall}`,
           ...logDetails
@@ -2836,10 +3051,10 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                           const nonIntervalIdx = nonIntervalBlocks.findIndex(b => b.id === block.id);
                           const is6thSlot = nonIntervalIdx >= 5;
                           const isRestrictedDay = day === 'segunda' || day === 'quarta' || day === 'sexta';
-                          const isRestricted6thSlot = isClass678 && isRestrictedDay && is6thSlot && !existingSlot;
+                          const isRestricted6thSlot = isClass678 && isRestrictedDay && is6thSlot && !existingSlot; const isDraggedOver = draggedOverCell?.day === day && draggedOverCell?.blockId === block.id;
 
                           return (
-                            <td key={day} className={`border-r border-slate-200 last:border-r-0 p-2 align-top relative ${isAdmin ? 'hover:bg-slate-50 cursor-pointer' : ''}`} onClick={() => !isEditing && openCellEdit(block, day, existingSlot)}>
+                            <td key={day} onDragOver={(e) => handleDragOver(e, day, block)} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, day, block)} className={`border-r border-slate-200 last:border-r-0 p-2 align-top relative transition-all ${isDraggedOver ? 'bg-red-50 ring-2 ring-red-500 ring-dashed' : ''} ${isAdmin ? 'hover:bg-slate-50 cursor-pointer' : ''}`} onClick={() => !isEditing && openCellEdit(block, day, existingSlot)}>
                               {isEditing ? (
                                 <div className="flex flex-col space-y-2 bg-white p-2 rounded-lg shadow-sm border border-slate-200" onClick={e => e.stopPropagation()}>
                                   <select 
@@ -2870,18 +3085,19 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                               ) : existingSlot ? (() => {
                                 const conflict = checkSlotConflict(existingSlot);
                                 return (
-                                  <div className={`flex flex-col items-center justify-center h-full min-h-[60px] p-2 rounded-lg border transition-all ${
-                                    conflict.isConflict 
-                                      ? 'bg-red-100 border-red-500 text-red-950 shadow-md ring-2 ring-red-400 animate-pulse' 
-                                      : 'bg-emerald-50/60 border-emerald-200 text-slate-800'
-                                  }`}>
+                                  <div draggable={isAdmin} onDragStart={(e) => handleDragStart(e, existingSlot)} className={`flex flex-col items-center justify-center h-full min-h-[60px] p-2 rounded-lg border transition-all ${isAdmin ? 'cursor-grab active:cursor-grabbing hover:brightness-95' : ''} ${conflict.isConflict ? 'bg-red-100 border-red-500 text-red-950 shadow-md ring-2 ring-red-400 animate-pulse' : 'bg-emerald-50/60 border-emerald-200 text-slate-800'}`}>
                                     {conflict.isConflict && (
-                                      <span className="text-[9px] font-bold uppercase tracking-wider text-red-700 bg-red-200 px-1.5 py-0.5 rounded mb-0.5 flex items-center gap-0.5">
+                                      <span title={conflict.reason} className="text-[9px] font-bold uppercase tracking-wider text-red-700 bg-red-200 px-1.5 py-0.5 rounded mb-0.5 flex items-center gap-0.5 cursor-help">
                                         ⚠️ Conflito
                                       </span>
                                     )}
                                     <span className="font-bold text-xs text-center">{existingSlot.subject}</span>
                                     <span className="text-[10px] opacity-80 text-center">{teachers.find(t => t.id === existingSlot.teacher_id)?.name || 'S/ Prof'}</span>
+                                    {conflict.isConflict && conflict.reason && (
+                                      <span className="text-[8px] text-red-700 font-semibold text-center leading-tight mt-1 bg-white/80 border border-red-200 px-1 py-0.5 rounded">
+                                        {conflict.reason}
+                                      </span>
+                                    )}
                                   </div>
                                 );
                               })() : isRestricted6thSlot ? (
