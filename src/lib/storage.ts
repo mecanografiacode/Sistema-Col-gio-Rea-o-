@@ -1756,7 +1756,7 @@ class StorageService {
         const ids = slots.map(s => ensureValidUuid(s.id));
         if (ids.length > 0) {
           const idsString = ids.map(id => `'${id}'`).join(',');
-          await supabase.from('schedule_slots').delete().filter('id', 'not.in', `(${idsString})`);
+          await supabase.from('schedule_slots').delete().not('id', 'in', `(${idsString})`);
         } else {
           await supabase.from('schedule_slots').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         }
@@ -1768,8 +1768,8 @@ class StorageService {
             teacher_id: toValidUuidOrNull(s.teacher_id),
             subject: s.subject || 'Aula',
             day_of_week: s.day_of_week || 'segunda',
-            start_time: s.start_time || '07:20',
-            end_time: s.end_time || '08:10'
+            start_time: s.start_time || '07:15',
+            end_time: s.end_time || '08:05'
           };
           await supabase.from('schedule_slots').upsert([payload]);
         }
@@ -1793,7 +1793,7 @@ class StorageService {
         const ids = blocks.map(b => ensureValidUuid(b.id));
         if (ids.length > 0) {
           const idsString = ids.map(id => `'${id}'`).join(',');
-          await supabase.from('time_blocks').delete().filter('id', 'not.in', `(${idsString})`);
+          await supabase.from('time_blocks').delete().not('id', 'in', `(${idsString})`);
         } else {
           await supabase.from('time_blocks').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         }
@@ -1802,8 +1802,8 @@ class StorageService {
           const payload = {
             id: ensureValidUuid(tb.id),
             class_id: toValidUuidOrNull(tb.class_id),
-            start_time: tb.start_time || '07:20',
-            end_time: tb.end_time || '08:10',
+            start_time: tb.start_time || '07:15',
+            end_time: tb.end_time || '08:05',
             is_interval: tb.is_interval || false
           };
           await supabase.from('time_blocks').upsert([payload]);
@@ -2071,8 +2071,8 @@ class StorageService {
           teacher_id: toValidUuidOrNull(s.teacher_id),
           subject: s.subject || 'Aula',
           day_of_week: s.day_of_week || 'segunda',
-          start_time: s.start_time || '07:20',
-          end_time: s.end_time || '08:10'
+          start_time: s.start_time || '07:15',
+          end_time: s.end_time || '08:05'
         };
         const { error } = await supabase.from('schedule_slots').upsert([payload]);
         if (!error) count++;
@@ -2084,8 +2084,8 @@ class StorageService {
         const payload = {
           id: ensureValidUuid(tb.id),
           class_id: toValidUuidOrNull(tb.class_id),
-          start_time: tb.start_time || '07:20',
-          end_time: tb.end_time || '08:10',
+          start_time: tb.start_time || '07:15',
+          end_time: tb.end_time || '08:05',
           is_interval: tb.is_interval || false
         };
         const { error } = await supabase.from('time_blocks').upsert([payload]);

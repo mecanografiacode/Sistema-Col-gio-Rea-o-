@@ -482,16 +482,16 @@ CREATE TABLE IF NOT EXISTS public.schedule_slots (
   teacher_id UUID REFERENCES public.teachers(id) ON DELETE SET NULL,
   subject TEXT DEFAULT 'Aula',
   day_of_week TEXT DEFAULT 'segunda' CHECK (day_of_week IN ('segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado')),
-  start_time TEXT DEFAULT '07:20',
-  end_time TEXT DEFAULT '08:10'
+  start_time TEXT DEFAULT '07:15',
+  end_time TEXT DEFAULT '08:05'
 );
 
 -- 16. Tabela de Blocos de Horário (time_blocks) - Editor de Horários
 CREATE TABLE IF NOT EXISTS public.time_blocks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   class_id UUID REFERENCES public.classes(id) ON DELETE CASCADE,
-  start_time TEXT DEFAULT '07:20',
-  end_time TEXT DEFAULT '08:10',
+  start_time TEXT DEFAULT '07:15',
+  end_time TEXT DEFAULT '08:05',
   is_interval BOOLEAN DEFAULT false
 );
 
