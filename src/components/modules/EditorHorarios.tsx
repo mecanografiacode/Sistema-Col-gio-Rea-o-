@@ -1530,7 +1530,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
   useEffect(() => {
     const allConflicts: string[] = [];
     scheduleSlots.forEach(slot => {
-      const { isConflict, reason, conflictingClasses } = checkSlotConflict(slot);
+      const { isConflict, reason } = checkSlotConflict(slot);
       if (isConflict) {
         const clsName = classes.find(c => c.id === slot.class_id)?.name || 'Turma';
         const teacherName = teachers.find(t => t.id === slot.teacher_id)?.name || 'Professor';
@@ -1538,23 +1538,76 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       }
     });
 
-    if (allConflicts.length > 0) {
+    const emptySlotsWarnings: string[] = [];
+    classes.forEach(cls => {
+      const clsBlocks = timeBlocks
+        .filter(tb => tb.class_id === cls.id && !tb.is_interval)
+        .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+      
+      const isClass678 = is678Grade(cls.name);
+      const days: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+
+      days.forEach(day => {
+        clsBlocks.forEach((block, idx) => {
+          const is6thSlot = idx >= 5;
+          const isRestrictedDay = day === 'segunda' || day === 'quarta' || day === 'sexta';
+          if (isClass678 && isRestrictedDay && is6thSlot) {
+            return;
+          }
+
+          const hasSlot = scheduleSlots.some(s => 
+            s.class_id === cls.id && 
+            s.day_of_week === day && 
+            s.start_time === block.start_time && 
+            s.end_time === block.end_time
+          );
+
+          if (!hasSlot) {
+            const dayMap: Record<string, string> = {
+              segunda: 'Segunda-feira',
+              terca: 'Terça-feira',
+              quarta: 'Quarta-feira',
+              quinta: 'Quinta-feira',
+              sexta: 'Sexta-feira'
+            };
+            const dayLabel = dayMap[day] || day;
+            emptySlotsWarnings.push(`[${cls.name}] Horário Vago na ${dayLabel} (${block.start_time} - ${block.end_time}) - Alunos ficam livres!`);
+          }
+        });
+      });
+    });
+
+    if (allConflicts.length > 0 || emptySlotsWarnings.length > 0) {
       const uniqueConflicts = Array.from(new Set(allConflicts));
+      const uniqueEmpty = Array.from(new Set(emptySlotsWarnings));
+      
+      let message = '';
+      if (uniqueConflicts.length > 0 && uniqueEmpty.length > 0) {
+        message = `⚠️ Atenção: Detectado(s) ${uniqueConflicts.length} conflito(s) e ${uniqueEmpty.length} horário(s) vago(s) (alunos livres)!`;
+      } else if (uniqueConflicts.length > 0) {
+        message = `⚠️ Atenção: Detectado(s) ${uniqueConflicts.length} conflito(s) de horário ou disponibilidade!`;
+      } else {
+        message = `⚠️ Atenção: Detectado(s) ${uniqueEmpty.length} horário(s) vago(s) (alunos livres)!`;
+      }
+
       setScheduleStatus({
-        message: `⚠️ Atenção: Detectado(s) ${uniqueConflicts.length} conflito(s) de horário ou disponibilidade! As células afetadas estão destacadas em vermelho.`,
+        message,
         type: 'warning',
-        details: uniqueConflicts.slice(0, 10)
+        details: [...uniqueConflicts.slice(0, 10), ...uniqueEmpty.slice(0, 15)]
       });
     } else {
-      // Clear warning if it was a conflict warning
       setScheduleStatus(prev => {
-        if (prev?.type === 'warning' && (prev.message.includes('conflito') || prev.message.includes('Atenção: Detectado'))) {
+        if (prev?.type === 'warning' && (
+          prev.message.includes('conflito') || 
+          prev.message.includes('Atenção: Detectado') || 
+          prev.message.includes('horário(s) vago(s)')
+        )) {
           return null;
         }
         return prev;
       });
     }
-  }, [scheduleSlots, teachers, classes]);
+  }, [scheduleSlots, teachers, classes, timeBlocks]);
 
   // --- HTML5 DRAG & DROP HANDLERS ---
   const handleDragStart = (e: React.DragEvent, slot: ScheduleSlot) => {
@@ -2529,7 +2582,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           if (isClass678 && isRestrictedDay && is6thSlot && !slot) {
             row.push('Sem 6º Horário\n(Apenas Ter/Qui)');
           } else {
-            row.push(slot ? `${slot.subject}\n(${teachers.find(t => t.id === slot.teacher_id)?.name || 'S/ Prof'})` : '---------');
+            row.push(slot ? `${slot.subject}\n(${teachers.find(t => t.id === slot.teacher_id)?.name || 'S/ Prof'})` : '⚠️ VAGO');
           }
         });
       }
@@ -2594,7 +2647,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
             if (isClass678 && isRestrictedDay && is6thSlot && !slot) {
               row.push('Sem 6º Horário\n(Apenas Ter/Qui)');
             } else {
-              row.push(slot ? `${slot.subject}\n(${teachers.find(t => t.id === slot.teacher_id)?.name || 'S/ Prof'})` : '---------');
+              row.push(slot ? `${slot.subject}\n(${teachers.find(t => t.id === slot.teacher_id)?.name || 'S/ Prof'})` : '⚠️ VAGO');
             }
           });
         }
@@ -3065,8 +3118,13 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                                   <span className="text-[9px] text-slate-400 text-center">(Apenas Ter/Qui)</span>
                                 </div>
                               ) : (
-                                <div className="flex items-center justify-center h-full min-h-[60px]">
-                                  <span className="text-xs text-slate-300 italic">Livre</span>
+                                <div className="flex flex-col items-center justify-center h-full min-h-[60px] p-2 bg-amber-50/50 hover:bg-amber-100/60 rounded-lg border border-dashed border-amber-300 transition-colors">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded mb-1 flex items-center gap-0.5">
+                                    ⚠️ Horário Vago
+                                  </span>
+                                  <span className="text-[10px] text-amber-800 font-medium text-center leading-tight">
+                                    Alunos livres!
+                                  </span>
                                 </div>
                               )}
                             </td>
