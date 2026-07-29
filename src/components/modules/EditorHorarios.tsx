@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UserProfile, Teacher, SchoolClass, ScheduleSlot, EducationalGroup, DayOfWeek, TimeBlock } from '../../types';
+import { UserProfile, Teacher, SchoolClass, ScheduleSlot, EducationalGroup, DayOfWeek, TimeBlock, Subject } from '../../types';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Plus, Trash2, Edit2, AlertCircle, Save, Download, CalendarClock, Wand2 } from 'lucide-react';
@@ -49,9 +49,10 @@ interface EditorHorariosProps {
 export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) => {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [scheduleSlots, setScheduleSlots] = useState<ScheduleSlot[]>([]);
   const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>([]);
-  const [activeTab, setActiveTab] = useState<'grade' | 'professores' | 'turmas'>('grade');
+  const [activeTab, setActiveTab] = useState<'grade' | 'professores' | 'turmas' | 'disciplinas'>('grade');
   const [isLoading, setIsLoading] = useState(true);
 
   // Load from storage (with Supabase fallback)
@@ -63,6 +64,9 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
 
         const dbClasses = await storage.getClasses();
         setClasses(dbClasses || []);
+
+        const dbSubjects = await storage.getSubjects();
+        setSubjects(dbSubjects || []);
 
         const dbSlots = await storage.getScheduleSlots();
         setScheduleSlots(dbSlots || []);
@@ -93,6 +97,12 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
 
   useEffect(() => {
     if (!isLoading) {
+      storage.saveSubjects(subjects);
+    }
+  }, [subjects, isLoading]);
+
+  useEffect(() => {
+    if (!isLoading) {
       storage.saveScheduleSlots(scheduleSlots);
     }
   }, [scheduleSlots, isLoading]);
@@ -102,7 +112,6 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
       storage.saveTimeBlocks(timeBlocks);
     }
   }, [timeBlocks, isLoading]);
-
 
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'super_admin';
 
@@ -118,12 +127,12 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
       </div>
 
       {/* Tabs */}
-      <div className="flex space-x-2 border-b border-slate-200">
-        {(isAdmin ? ['grade', 'professores', 'turmas'] : ['grade']).map((tab) => (
+      <div className="flex space-x-2 border-b border-slate-200 overflow-x-auto">
+        {(isAdmin ? ['grade', 'professores', 'turmas', 'disciplinas'] : ['grade']).map((tab) => (
           <button
             key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 text-sm font-semibold capitalize border-b-2 transition-colors ${
+            onClick={() => setActiveTab(tab as any)}
+            className={`px-4 py-2 text-sm font-semibold capitalize border-b-2 transition-colors whitespace-nowrap ${
               activeTab === tab
                 ? 'border-red-600 text-red-700'
                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
@@ -136,10 +145,13 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
 
       <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 min-h-[500px]">
         {activeTab === 'professores' && (
-          <TeacherManager teachers={teachers} setTeachers={setTeachers} />
+          <TeacherManager teachers={teachers} setTeachers={setTeachers} subjects={subjects} />
         )}
         {activeTab === 'turmas' && (
-          <ClassManager classes={classes} setClasses={setClasses} />
+          <ClassManager classes={classes} setClasses={setClasses} subjects={subjects} />
+        )}
+        {activeTab === 'disciplinas' && (
+          <SubjectManager subjects={subjects} setSubjects={setSubjects} />
         )}
         {activeTab === 'grade' && (
           <ScheduleManager
@@ -158,9 +170,9 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
 };
 
 // --- Teacher Manager ---
-function TeacherManager({ teachers, setTeachers }: { teachers: Teacher[], setTeachers: React.Dispatch<React.SetStateAction<Teacher[]>> }) {
+function TeacherManager({ teachers, setTeachers, subjects }: { teachers: Teacher[], setTeachers: React.Dispatch<React.SetStateAction<Teacher[]>>, subjects: Subject[] }) {
   const [newTeacherName, setNewTeacherName] = useState('');
-  const [newTeacherSubjects, setNewTeacherSubjects] = useState('');
+  const [newTeacherSubjects, setNewTeacherSubjects] = useState<string[]>([]);
   const [newTeacherDays, setNewTeacherDays] = useState<DayOfWeek[]>(['segunda', 'terca', 'quarta', 'quinta', 'sexta']);
   const [newTeacherShift, setNewTeacherShift] = useState<'matutino' | 'vespertino' | 'ambos'>('ambos');
   const [newTeacherGroups, setNewTeacherGroups] = useState<EducationalGroup[]>([]);
@@ -181,6 +193,14 @@ function TeacherManager({ teachers, setTeachers }: { teachers: Teacher[], setTea
     }
   };
 
+  const toggleSubject = (subjectName: string) => {
+    if (newTeacherSubjects.includes(subjectName)) {
+      setNewTeacherSubjects(newTeacherSubjects.filter(s => s !== subjectName));
+    } else {
+      setNewTeacherSubjects([...newTeacherSubjects, subjectName]);
+    }
+  };
+
   const toggleGroup = (group: EducationalGroup) => {
     if (newTeacherGroups.includes(group)) {
       setNewTeacherGroups(newTeacherGroups.filter(g => g !== group));
@@ -190,16 +210,14 @@ function TeacherManager({ teachers, setTeachers }: { teachers: Teacher[], setTea
   };
 
   const addTeacher = () => {
-    if (!newTeacherName.trim() || !newTeacherSubjects.trim() || newTeacherDays.length === 0 || newTeacherGroups.length === 0) return;
-    const subjects = newTeacherSubjects.split(',').map(s => s.trim()).filter(s => s);
-    if (subjects.length === 0) return;
+    if (!newTeacherName.trim() || newTeacherSubjects.length === 0 || newTeacherDays.length === 0 || newTeacherGroups.length === 0) return;
 
     setTeachers([
       ...teachers,
       {
         id: crypto.randomUUID(),
         name: newTeacherName,
-        subjects,
+        subjects: newTeacherSubjects,
         groups: newTeacherGroups,
         available_days: newTeacherDays,
         availability_shift: newTeacherShift,
@@ -207,7 +225,7 @@ function TeacherManager({ teachers, setTeachers }: { teachers: Teacher[], setTea
       }
     ]);
     setNewTeacherName('');
-    setNewTeacherSubjects('');
+    setNewTeacherSubjects([]);
     setNewTeacherDays(['segunda', 'terca', 'quarta', 'quinta', 'sexta']);
     setNewTeacherShift('ambos');
     setNewTeacherGroups([]);
@@ -237,14 +255,25 @@ function TeacherManager({ teachers, setTeachers }: { teachers: Teacher[], setTea
             />
           </div>
           <div className="flex-1 w-full">
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Disciplinas (separadas por vírgula)</label>
-            <input
-              type="text"
-              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none"
-              placeholder="Ex: Matemática, Física"
-              value={newTeacherSubjects}
-              onChange={(e) => setNewTeacherSubjects(e.target.value)}
-            />
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Disciplinas</label>
+            <div className="flex flex-wrap gap-2">
+              {subjects.map(subject => (
+                <button
+                  key={subject.id}
+                  onClick={() => toggleSubject(subject.name)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors ${
+                    newTeacherSubjects.includes(subject.name)
+                      ? 'bg-blue-50 border-blue-200 text-blue-700'
+                      : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+                  }`}
+                >
+                  {subject.name}
+                </button>
+              ))}
+              {subjects.length === 0 && (
+                <span className="text-xs text-slate-400 italic py-1.5">Nenhuma disciplina cadastrada. Vá na aba Disciplinas.</span>
+              )}
+            </div>
           </div>
         </div>
         
@@ -381,9 +410,10 @@ function TeacherManager({ teachers, setTeachers }: { teachers: Teacher[], setTea
 }
 
 // --- Class Manager ---
-function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClasses: React.Dispatch<React.SetStateAction<SchoolClass[]>> }) {
+function ClassManager({ classes, setClasses, subjects }: { classes: SchoolClass[], setClasses: React.Dispatch<React.SetStateAction<SchoolClass[]>>, subjects: Subject[] }) {
   const [newClassName, setNewClassName] = useState('');
   const [newClassGroup, setNewClassGroup] = useState<EducationalGroup>('anos_iniciais');
+  const [newClassShift, setNewClassShift] = useState<'matutino' | 'vespertino' | 'ambos'>('ambos');
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
   const [editingWorkloads, setEditingWorkloads] = useState<{ [subject: string]: number }>({});
   const [newSubjectName, setNewSubjectName] = useState('');
@@ -395,14 +425,6 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
                             newClassGroup === 'anos_iniciais' ? DEFAULT_INICIAIS_WORKLOAD :
                             newClassGroup === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
     
-    const upperName = newClassName.toUpperCase().trim();
-    let inferredShift: 'matutino' | 'vespertino' | 'ambos' = 'ambos';
-    if (upperName.endsWith('A') || upperName.includes(' A ') || upperName.endsWith('-A')) {
-      inferredShift = 'matutino';
-    } else if (upperName.endsWith('B') || upperName.includes(' B ') || upperName.endsWith('-B')) {
-      inferredShift = 'vespertino';
-    }
-
     setClasses([
       ...classes,
       {
@@ -410,7 +432,7 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
         name: newClassName,
         group: newClassGroup,
         subject_workloads: { ...defaultWorkload },
-        shift: inferredShift,
+        shift: newClassShift,
         created_at: new Date().toISOString()
       }
     ]);
@@ -517,6 +539,18 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
             <option value="ensino_medio">Ensino Médio</option>
           </select>
         </div>
+        <div className="flex-1 w-full">
+          <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Turno</label>
+          <select
+            className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none"
+            value={newClassShift}
+            onChange={(e) => setNewClassShift(e.target.value as 'matutino' | 'vespertino' | 'ambos')}
+          >
+            <option value="matutino">Matutino</option>
+            <option value="vespertino">Vespertino</option>
+            <option value="ambos">Ambos</option>
+          </select>
+        </div>
         <button
           onClick={addClass}
           disabled={!newClassName.trim()}
@@ -602,71 +636,102 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
           <div className="bg-white rounded-2xl border border-red-200 p-5 shadow-sm space-y-4">
             <div>
               <div className="flex justify-between items-center mb-1">
-                <h3 className="font-bold text-slate-800 text-sm font-serif-editorial">Carga Horária: {selectedClassForEdit.name}</h3>
+                <h3 className="font-bold text-slate-800 text-sm font-serif-editorial">Editar: {selectedClassForEdit.name}</h3>
                 <button onClick={() => setEditingClassId(null)} className="text-xs text-slate-400 hover:text-slate-600 font-bold">Fechar</button>
               </div>
-              <p className="text-[11px] text-slate-500">Defina o número de aulas semanais para cada disciplina da turma.</p>
+              <p className="text-[11px] text-slate-500">Defina o turno e o número de aulas semanais.</p>
             </div>
 
-            <div className="space-y-2.5 max-h-[280px] overflow-y-auto pr-1">
-              {Object.entries(editingWorkloads).map(([subject, hours]) => {
-                const h = hours as number;
-                return (
-                  <div key={subject} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100 text-xs">
-                    <span className="font-semibold text-slate-700 truncate max-w-[120px]">{subject}</span>
-                    <div className="flex items-center space-x-2">
-                      <button 
-                        onClick={() => updateSubjectHours(subject, h - 1)} 
-                        className="w-5 h-5 rounded bg-white hover:bg-slate-100 border text-slate-600 font-bold flex items-center justify-center text-[10px] shadow-sm"
-                      >
-                        -
-                      </button>
-                      <span className="w-8 text-center font-bold text-slate-800">{h}h</span>
-                      <button 
-                        onClick={() => updateSubjectHours(subject, h + 1)} 
-                        className="w-5 h-5 rounded bg-white hover:bg-slate-100 border text-slate-600 font-bold flex items-center justify-center text-[10px] shadow-sm"
-                      >
-                        +
-                      </button>
-                      <button 
-                        onClick={() => deleteSubject(subject)} 
-                        className="text-red-500 hover:text-red-700 ml-1 p-0.5"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+            <div className="flex flex-col gap-1.5 mb-2">
+              <label className="text-[11px] font-bold text-slate-700 uppercase">Turno da Turma</label>
+              <select
+                className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded focus:outline-none focus:border-red-400"
+                value={selectedClassForEdit.shift || 'ambos'}
+                onChange={(e) => {
+                  const shift = e.target.value as 'matutino' | 'vespertino' | 'ambos';
+                  setClasses(prev => prev.map(c => c.id === editingClassId ? { ...c, shift } : c));
+                }}
+              >
+                <option value="matutino">Matutino</option>
+                <option value="vespertino">Vespertino</option>
+                <option value="ambos">Ambos</option>
+              </select>
+            </div>
+
+            <div className="border-t border-slate-100 pt-3">
+              <label className="text-[11px] font-bold text-slate-700 uppercase mb-2 block">Carga Horária Semanal</label>
+              <div className="space-y-2.5 max-h-[200px] overflow-y-auto pr-1">
+                {Object.entries(editingWorkloads).map(([subject, hours]) => {
+                  const h = hours as number;
+                  return (
+                    <div key={subject} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100 text-xs">
+                      <span className="font-semibold text-slate-700 truncate max-w-[120px]">{subject}</span>
+                      <div className="flex items-center space-x-2">
+                        <button 
+                          onClick={() => updateSubjectHours(subject, h - 1)} 
+                          className="w-5 h-5 rounded bg-white hover:bg-slate-100 border text-slate-600 font-bold flex items-center justify-center text-[10px] shadow-sm"
+                        >
+                          -
+                        </button>
+                        <span className="w-8 text-center font-bold text-slate-800">{h}h</span>
+                        <button 
+                          onClick={() => updateSubjectHours(subject, h + 1)} 
+                          className="w-5 h-5 rounded bg-white hover:bg-slate-100 border text-slate-600 font-bold flex items-center justify-center text-[10px] shadow-sm"
+                        >
+                          +
+                        </button>
+                        <button 
+                          onClick={() => deleteSubject(subject)} 
+                          className="text-red-500 hover:text-red-700 ml-1 p-0.5"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-              {Object.keys(editingWorkloads).length === 0 && (
-                <div className="text-center py-6 text-xs text-slate-400 italic">Nenhuma disciplina cadastrada para esta turma.</div>
-              )}
+                  );
+                })}
+                {Object.keys(editingWorkloads).length === 0 && (
+                  <div className="text-center py-6 text-xs text-slate-400 italic">Nenhuma disciplina cadastrada para esta turma.</div>
+                )}
+              </div>
             </div>
 
             {/* Add subject form */}
             <div className="pt-2 border-t border-slate-100 space-y-2">
               <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide">Nova Disciplina</span>
               <div className="flex gap-2">
+                <select
+                  className="flex-1 min-w-0 px-2.5 py-1.5 bg-white border border-slate-300 rounded text-xs focus:ring-1 focus:ring-red-500 focus:outline-none"
+                  value={newSubjectName}
+                  onChange={(e) => setNewSubjectName(e.target.value)}
+                >
+                  <option value="">Selecione ou digite...</option>
+                  {subjects.map(s => (
+                    <option key={s.id} value={s.name}>{s.name}</option>
+                  ))}
+                </select>
                 <input
                   type="text"
-                  placeholder="Ex: Português"
+                  placeholder="Ou digite"
                   className="flex-1 min-w-0 px-2.5 py-1.5 bg-white border border-slate-300 rounded text-xs focus:ring-1 focus:ring-red-500 focus:outline-none"
                   value={newSubjectName}
                   onChange={(e) => setNewSubjectName(e.target.value)}
                 />
+              </div>
+              <div className="flex gap-2">
                 <input
                   type="number"
                   min="1"
-                  className="w-12 px-2 py-1.5 bg-white border border-slate-300 rounded text-xs focus:ring-1 focus:ring-red-500 focus:outline-none text-center"
+                  className="w-16 px-2 py-1.5 bg-white border border-slate-300 rounded text-xs focus:ring-1 focus:ring-red-500 focus:outline-none text-center"
                   value={newSubjectHours}
                   onChange={(e) => setNewSubjectHours(Number(e.target.value))}
                 />
                 <button
                   onClick={addSubject}
                   disabled={!newSubjectName.trim()}
-                  className="bg-slate-800 hover:bg-slate-950 text-white px-2.5 py-1.5 rounded text-xs font-bold transition-colors disabled:opacity-50"
+                  className="flex-1 bg-slate-800 hover:bg-slate-950 text-white px-2.5 py-1.5 rounded text-xs font-bold transition-colors disabled:opacity-50"
                 >
-                  Ok
+                  Adicionar
                 </button>
               </div>
             </div>
@@ -686,6 +751,67 @@ function ClassManager({ classes, setClasses }: { classes: SchoolClass[], setClas
                 Cancelar
               </button>
             </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- Subject Manager ---
+function SubjectManager({ subjects, setSubjects }: { subjects: Subject[], setSubjects: React.Dispatch<React.SetStateAction<Subject[]>> }) {
+  const [newSubjectName, setNewSubjectName] = useState('');
+
+  const addSubject = () => {
+    if (!newSubjectName.trim()) return;
+    setSubjects([...subjects, { id: crypto.randomUUID(), name: newSubjectName.trim(), created_at: new Date().toISOString() }]);
+    setNewSubjectName('');
+  };
+
+  const removeSubject = async (id: string) => {
+    try {
+      await storage.deleteSubject(id);
+      setSubjects(subjects.filter(s => s.id !== id));
+    } catch (err: any) {
+      console.error('Erro ao deletar disciplina:', err?.message || err);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row gap-4 items-end">
+        <div className="flex-1 w-full">
+          <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Nome da Disciplina</label>
+          <input
+            type="text"
+            className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none"
+            placeholder="Ex: Português"
+            value={newSubjectName}
+            onChange={(e) => setNewSubjectName(e.target.value)}
+          />
+        </div>
+        <button
+          onClick={addSubject}
+          disabled={!newSubjectName.trim()}
+          className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center h-[42px]"
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Adicionar
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
+        {subjects.map(subject => (
+          <div key={subject.id} className="flex items-center justify-between bg-white border border-slate-200 p-3 rounded-xl shadow-sm">
+            <span className="font-semibold text-slate-700 text-sm">{subject.name}</span>
+            <button onClick={() => removeSubject(subject.id)} className="text-red-500 hover:text-red-700 p-1 bg-red-50 rounded-lg transition-colors">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+        {subjects.length === 0 && (
+          <div className="col-span-full py-8 text-center text-slate-500 italic">
+            Nenhuma disciplina cadastrada.
           </div>
         )}
       </div>

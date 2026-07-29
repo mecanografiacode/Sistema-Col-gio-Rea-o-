@@ -218,6 +218,12 @@ export type DayOfWeek = 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 's
 
 export type Shift = 'matutino' | 'vespertino' | 'ambos';
 
+export interface Subject {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
 export interface Teacher {
   id: string;
   name: string;

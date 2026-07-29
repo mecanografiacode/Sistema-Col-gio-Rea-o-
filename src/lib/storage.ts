@@ -1645,6 +1645,43 @@ class StorageService {
     this.setItem('cr_teachers', items);
   }
 
+  // --- SUBJECTS (DISCIPLINAS) ---
+  public async getSubjects(): Promise<any[]> {
+    return this.fetchFromSupabaseOrCache<any>('subjects', 'cr_subjects', [], 'name', true);
+  }
+
+  public async saveSubjects(subjects: any[]): Promise<void> {
+    this.setItem('cr_subjects', subjects);
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        for (const s of subjects) {
+          const payload = {
+            id: ensureValidUuid(s.id),
+            name: s.name,
+            created_at: s.created_at || new Date().toISOString()
+          };
+          await supabase.from('subjects').upsert([payload]);
+        }
+      } catch (err) {
+        console.warn('Erro ao salvar disciplinas no Supabase:', err);
+      }
+    }
+  }
+
+  public async deleteSubject(id: string): Promise<void> {
+    const supabase = getSupabaseClient();
+    if (supabase && isUUID(id)) {
+      const { error } = await supabase.from('subjects').delete().eq('id', id);
+      if (error) {
+        console.error('Erro ao deletar disciplina no Supabase:', error.message);
+        throw error;
+      }
+    }
+    const items = this.getItem<any>('cr_subjects').filter(s => s.id !== id);
+    this.setItem('cr_subjects', items);
+  }
+
   // --- CLASSES (TURMAS) ---
   public async getClasses(): Promise<any[]> {
     return this.fetchFromSupabaseOrCache<any>('classes', 'cr_classes', [], 'name', true);
