@@ -45,6 +45,7 @@ export interface ServiceOrder {
   foto_conclusao_url?: string;
   concluded_at?: string;
   concluded_notes?: string;
+  cost?: number;
   comments: OSComment[];
   created_at: string;
   updated_at: string;
@@ -232,6 +233,9 @@ export interface Teacher {
   workload_hours?: number;
   available_days: DayOfWeek[];
   availability_shift: Shift;
+  available_slots?: number[];
+  class_ids?: string[];
+  availability_grid?: { [key: string]: boolean };
   created_at: string;
 }
 

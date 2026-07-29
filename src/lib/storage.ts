@@ -404,6 +404,7 @@ class StorageService {
                 role: c.role,
                 department: c.department,
                 avatar_url: c.avatar_url || null,
+                password: c.password || '123456',
                 is_active: c.is_active,
                 created_at: c.created_at
               }]);
@@ -475,6 +476,7 @@ class StorageService {
           role: newProfile.role,
           department: newProfile.department,
           avatar_url: newProfile.avatar_url || null,
+          password: newProfile.password || '123456',
           is_active: newProfile.is_active,
           created_at: newProfile.created_at
         };
@@ -537,6 +539,7 @@ class StorageService {
             role: profiles[index].role,
             department: profiles[index].department,
             avatar_url: profiles[index].avatar_url || null,
+            password: profiles[index].password || '123456',
             is_active: profiles[index].is_active
           };
 
@@ -646,6 +649,7 @@ class StorageService {
       priority: so.priority || 'media',
       status: so.status || 'aberta',
       sector: so.sector || 'Geral',
+      cost: so.cost || 0,
       comments: [],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -675,6 +679,7 @@ class StorageService {
           foto_conclusao_url: newSO.foto_conclusao_url || null,
           concluded_at: newSO.concluded_at || null,
           concluded_notes: newSO.concluded_notes || null,
+          cost: newSO.cost || 0,
           comments: newSO.comments || [],
           created_at: newSO.created_at,
           updated_at: newSO.updated_at
@@ -774,7 +779,8 @@ class StorageService {
     concludedNotes: string,
     fotoConclusaoUrl: string | undefined,
     concludedAt: string | undefined,
-    actor: UserProfile | null
+    actor: UserProfile | null,
+    cost?: number
   ) {
     const items = this.getItem<ServiceOrder>('cr_service_orders');
     const idx = items.findIndex((i) => i.id === soId);
@@ -784,6 +790,7 @@ class StorageService {
       items[idx].concluded_notes = concludedNotes;
       if (fotoConclusaoUrl) items[idx].foto_conclusao_url = fotoConclusaoUrl;
       items[idx].concluded_at = concludedAt || new Date().toISOString();
+      if (typeof cost === 'number') items[idx].cost = cost;
       items[idx].updated_at = new Date().toISOString();
       this.setItem('cr_service_orders', items);
 
@@ -796,6 +803,7 @@ class StorageService {
             concluded_notes: concludedNotes || null,
             foto_conclusao_url: fotoConclusaoUrl || null,
             concluded_at: items[idx].concluded_at,
+            cost: items[idx].cost || 0,
             updated_at: items[idx].updated_at
           })
           .eq('id', soId);
@@ -807,7 +815,32 @@ class StorageService {
         'ordens_servico',
         `OS ID ${soId} (${items[idx].title}) Concluída`,
         `Status: ${oldStatus}`,
-        `Status: concluida (Obs: ${concludedNotes || 'Nenhuma'})`
+        `Status: concluida (Obs: ${concludedNotes || 'Nenhuma'}, Valor: R$ ${items[idx].cost || 0})`
+      );
+    }
+  }
+
+  public async updateServiceOrderCost(soId: string, cost: number, actor: UserProfile | null) {
+    const items = this.getItem<ServiceOrder>('cr_service_orders');
+    const idx = items.findIndex((i) => i.id === soId);
+    if (idx !== -1) {
+      const oldCost = items[idx].cost || 0;
+      items[idx].cost = cost;
+      items[idx].updated_at = new Date().toISOString();
+      this.setItem('cr_service_orders', items);
+
+      const supabase = getSupabaseClient();
+      if (supabase && isUUID(soId)) {
+        await supabase.from('service_orders').update({ cost, updated_at: items[idx].updated_at }).eq('id', soId);
+      }
+
+      await this.logAudit(
+        actor,
+        'edicao',
+        'ordens_servico',
+        `OS ID ${soId} (${items[idx].title}) - Custo Atualizado`,
+        `R$ ${oldCost}`,
+        `R$ ${cost}`
       );
     }
   }
@@ -1622,6 +1655,9 @@ class StorageService {
             workload_hours: t.workload_hours || 0,
             available_days: t.available_days || [],
             availability_shift: t.availability_shift || 'ambos',
+            available_slots: t.available_slots || [],
+            class_ids: t.class_ids || [],
+            availability_grid: t.availability_grid || {},
             created_at: t.created_at || new Date().toISOString()
           };
           await supabase.from('teachers').upsert([payload]);
@@ -1794,6 +1830,34 @@ class StorageService {
     }
   }
 
+  // --- CLEAR ALL SCHEDULE DATA ---
+  public async clearAllScheduleData(): Promise<void> {
+    localStorage.removeItem('cr_teachers');
+    localStorage.removeItem('cr_classes');
+    localStorage.removeItem('cr_schedule_slots');
+    localStorage.removeItem('cr_time_blocks');
+    localStorage.removeItem('cr_subjects');
+    localStorage.setItem('cr_teachers', JSON.stringify([]));
+    localStorage.setItem('cr_classes', JSON.stringify([]));
+    localStorage.setItem('cr_schedule_slots', JSON.stringify([]));
+    localStorage.setItem('cr_time_blocks', JSON.stringify([]));
+    localStorage.setItem('cr_subjects', JSON.stringify([]));
+
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        await supabase.from('schedule_slots').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        await supabase.from('time_blocks').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        await supabase.from('teachers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        await supabase.from('classes').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        await supabase.from('subjects').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      } catch (err) {
+        console.warn('Erro ao limpar tabelas de horários no Supabase:', err);
+      }
+    }
+    this.notify();
+  }
+
   // --- FORCE SYNC LOCAL DATA TO SUPABASE ---
   public async syncAllToSupabase(): Promise<{ success: boolean; count: number; error?: string }> {
     const supabase = getSupabaseClient();
@@ -1818,6 +1882,7 @@ class StorageService {
           role: p.role,
           department: p.department || 'Geral',
           avatar_url: p.avatar_url || null,
+          password: p.password || '123456',
           is_active: p.is_active,
           created_at: p.created_at || new Date().toISOString()
         };
@@ -1869,6 +1934,7 @@ class StorageService {
           foto_conclusao_url: so.foto_conclusao_url || null,
           concluded_at: so.concluded_at || null,
           concluded_notes: so.concluded_notes || null,
+          cost: so.cost || 0,
           comments: so.comments || [],
           created_at: so.created_at || new Date().toISOString(),
           updated_at: so.updated_at || new Date().toISOString()

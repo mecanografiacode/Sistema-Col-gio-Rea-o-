@@ -80,6 +80,7 @@ export const Login: React.FC<LoginProps> = ({ profiles, onLoginSuccess, onOpenPu
                 full_name: loggedInUser.full_name,
                 role: loggedInUser.role,
                 department: loggedInUser.department,
+                password: loggedInUser.password || '123456',
                 is_active: loggedInUser.is_active,
                 created_at: loggedInUser.created_at
               };

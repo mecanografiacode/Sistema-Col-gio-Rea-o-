@@ -460,6 +460,9 @@ CREATE TABLE IF NOT EXISTS public.teachers (
   workload_hours INT DEFAULT 0,
   available_days TEXT[] DEFAULT '{}',
   availability_shift TEXT DEFAULT 'ambos' CHECK (availability_shift IN ('matutino', 'vespertino', 'ambos')),
+  available_slots INT[] DEFAULT '{}',
+  class_ids TEXT[] DEFAULT '{}',
+  availability_grid JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

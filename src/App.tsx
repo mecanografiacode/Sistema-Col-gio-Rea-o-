@@ -57,8 +57,13 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (currentUser?.role === 'operador' || currentUser?.role === 'admin') {
+    if (currentUser?.role === 'operador') {
       const allowedTabs: NavTab[] = ['ordens_servico', 'materiais', 'suporte_tecnico', 'notificacoes'];
+      if (!allowedTabs.includes(activeTab)) {
+        setActiveTab('ordens_servico');
+      }
+    } else if (currentUser?.role === 'admin') {
+      const allowedTabs: NavTab[] = ['ordens_servico', 'materiais', 'suporte_tecnico', 'editor_horarios', 'notificacoes'];
       if (!allowedTabs.includes(activeTab)) {
         setActiveTab('ordens_servico');
       }

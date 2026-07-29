@@ -27,7 +27,15 @@ import {
   Trash2,
   FileDown,
   Share2,
-  ExternalLink
+  ExternalLink,
+  DollarSign,
+  TrendingUp,
+  BarChart2,
+  PieChart,
+  Tag,
+  Activity,
+  CheckCircle,
+  Coins
 } from 'lucide-react';
 
 interface OrdensServicoProps {
@@ -52,6 +60,7 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
   const [isConcludeModalOpen, setIsConcludeModalOpen] = useState(false);
   const [conclusaoData, setConclusaoData] = useState('');
   const [conclusaoObservacao, setConclusaoObservacao] = useState('');
+  const [conclusaoCusto, setConclusaoCusto] = useState<string>('');
   const [fotoConsertoUrl, setFotoConsertoUrl] = useState('');
 
   // Delete Confirm State
@@ -64,7 +73,12 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
   const [priority, setPriority] = useState<OSPriority>('media');
   const [sector, setSector] = useState('Salas de Aula');
   const [equipmentId, setEquipmentId] = useState('');
+  const [costInput, setCostInput] = useState<string>('');
   const [photoUrl, setPhotoUrl] = useState('');
+
+  // Editing Cost State in detail modal
+  const [isEditingCost, setIsEditingCost] = useState(false);
+  const [editCostVal, setEditCostVal] = useState<string>('');
 
   // Comment input
   const [newComment, setNewComment] = useState('');
@@ -106,7 +120,8 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
         equipment_name: selectedEq?.name,
         created_by: currentUser.id,
         created_by_name: currentUser.full_name,
-        photo_url: photoUrl || undefined
+        photo_url: photoUrl || undefined,
+        cost: costInput ? parseFloat(costInput) : 0
       },
       currentUser
     );
@@ -128,13 +143,16 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
     setDescription('');
     setPhotoUrl('');
     setEquipmentId('');
+    setCostInput('');
   };
 
   const handleUpdateStatus = async (osId: string, newStatus: OSStatus) => {
     if (newStatus === 'concluida') {
       // Prompt conclusion details modal
+      const target = orders.find((o) => o.id === osId);
       setConclusaoData(new Date().toISOString().slice(0, 16));
       setConclusaoObservacao('');
+      setConclusaoCusto(target?.cost ? String(target.cost) : '');
       setFotoConsertoUrl('');
       setIsConcludeModalOpen(true);
       return;
@@ -159,12 +177,15 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
     e.preventDefault();
     if (!selectedOrder) return;
 
+    const parsedCost = conclusaoCusto ? parseFloat(conclusaoCusto) : selectedOrder.cost || 0;
+
     await storage.concludeServiceOrder(
       selectedOrder.id,
-      conclusaoData || new Date().toISOString(),
-      conclusaoObservacao || undefined,
+      conclusaoObservacao || 'Concluído',
       fotoConsertoUrl || undefined,
-      currentUser
+      conclusaoData || new Date().toISOString(),
+      currentUser,
+      parsedCost
     );
 
     setIsConcludeModalOpen(false);
@@ -177,10 +198,21 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
     await createSystemNotification(
       selectedOrder.created_by,
       'Ordem de Serviço Concluída',
-      `A OS #${selectedOrder.id} foi concluída com sucesso.`,
+      `A OS #${selectedOrder.id} foi concluída com sucesso. Valor gasto: R$ ${parsedCost.toFixed(2)}`,
       'ordens_servico',
       selectedOrder.id
     );
+  };
+
+  const handleSaveCostEdit = async () => {
+    if (!selectedOrder) return;
+    const val = editCostVal ? parseFloat(editCostVal) : 0;
+    await storage.updateServiceOrderCost(selectedOrder.id, val, currentUser);
+    setIsEditingCost(false);
+
+    const updatedOrders = await storage.getServiceOrders();
+    const curr = updatedOrders.find((o) => o.id === selectedOrder.id);
+    if (curr) setSelectedOrder(curr);
   };
 
   const handleAssignStaff = async (osId: string, staffId: string) => {
@@ -292,6 +324,34 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
     }
   };
 
+  const totalOrders = orders.length;
+  const countAbertas = orders.filter((o) => o.status === 'aberta').length;
+  const countEmAndamento = orders.filter((o) => o.status === 'em_andamento' || o.status === 'aguardando_peca').length;
+  const countConcluidas = orders.filter((o) => o.status === 'concluida').length;
+  const countCanceladas = orders.filter((o) => o.status === 'cancelada').length;
+  const totalGasto = orders.reduce((sum, o) => sum + (o.cost || 0), 0);
+
+  const formatCurrency = (val: number) => {
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+  };
+
+  const categoriesList: { key: OSCategory; label: string; badgeColor: string; barColor: string }[] = [
+    { key: 'eletrica', label: 'Elétrica', badgeColor: 'bg-amber-100 text-amber-800', barColor: 'bg-amber-500' },
+    { key: 'hidraulica', label: 'Hidráulica', badgeColor: 'bg-cyan-100 text-cyan-800', barColor: 'bg-cyan-500' },
+    { key: 'TI', label: 'TI / Redes', badgeColor: 'bg-indigo-100 text-indigo-800', barColor: 'bg-indigo-500' },
+    { key: 'predial', label: 'Predial', badgeColor: 'bg-rose-100 text-rose-800', barColor: 'bg-rose-500' },
+    { key: 'mobiliario', label: 'Mobiliário', badgeColor: 'bg-emerald-100 text-emerald-800', barColor: 'bg-emerald-500' },
+    { key: 'outro', label: 'Outro', badgeColor: 'bg-slate-100 text-slate-800', barColor: 'bg-slate-500' }
+  ];
+
+  const categoryStats = categoriesList.map((cat) => {
+    const catOrders = orders.filter((o) => o.category === cat.key);
+    const count = catOrders.length;
+    const spent = catOrders.reduce((acc, o) => acc + (o.cost || 0), 0);
+    const percentage = totalOrders > 0 ? Math.round((count / totalOrders) * 100) : 0;
+    return { ...cat, count, spent, percentage };
+  });
+
   return (
     <div className="space-y-6 pb-20 lg:pb-8">
       {/* Module Title Header */}
@@ -299,10 +359,10 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
         <div>
           <div className="flex items-center space-x-2">
             <ClipboardList className="w-6 h-6 text-[#D32F2F]" />
-            <h2 className="text-2xl font-serif-editorial font-bold text-gray-900">Ordens de Serviço</h2>
+            <h2 className="text-2xl font-serif-editorial font-bold text-gray-900">Dashboard & Ordens de Serviço</h2>
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Manutenção predial, elétrica, hidráulica e infraestrutura do Colégio Reação
+            Acompanhamento em tempo real das ordens de serviço e gastos de manutenção do Colégio Reação
           </p>
         </div>
 
@@ -341,6 +401,243 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
             <Plus className="w-4 h-4" />
             <span>Nova Ordem</span>
           </button>
+        </div>
+      </div>
+
+      {/* DASHBOARD EXECUTIVE KPI CARDS */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* CARD 1: ORDENS ABERTAS */}
+        <div className="bg-white p-5 rounded-2xl border border-red-100 shadow-xs hover:shadow-md transition-shadow relative overflow-hidden group">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-full blur-xl group-hover:bg-red-500/10 transition-colors" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-red-600">Ordens Abertas</span>
+            <div className="p-2.5 bg-red-50 text-red-600 rounded-xl border border-red-100">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-3xl font-black text-slate-900">{countAbertas}</div>
+            <p className="text-[11px] font-medium text-slate-500 mt-1 flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5 text-red-500" />
+              <span>Aguardando atendimento da equipe</span>
+            </p>
+          </div>
+        </div>
+
+        {/* CARD 2: EM ANDAMENTO */}
+        <div className="bg-white p-5 rounded-2xl border border-blue-100 shadow-xs hover:shadow-md transition-shadow relative overflow-hidden group">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-full blur-xl group-hover:bg-blue-500/10 transition-colors" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-blue-600">Em Andamento</span>
+            <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl border border-blue-100">
+              <Wrench className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-3xl font-black text-slate-900">{countEmAndamento}</div>
+            <p className="text-[11px] font-medium text-slate-500 mt-1 flex items-center gap-1">
+              <Activity className="w-3.5 h-3.5 text-blue-500" />
+              <span>Em execução ou aguardando peças</span>
+            </p>
+          </div>
+        </div>
+
+        {/* CARD 3: ORDENS CONCLUÍDAS */}
+        <div className="bg-white p-5 rounded-2xl border border-emerald-100 shadow-xs hover:shadow-md transition-shadow relative overflow-hidden group">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-xl group-hover:bg-emerald-500/10 transition-colors" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-emerald-600">Concluídas</span>
+            <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-3xl font-black text-slate-900">{countConcluidas}</div>
+            <p className="text-[11px] font-medium text-slate-500 mt-1 flex items-center gap-1">
+              <Check className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Serviços finalizados e entregues</span>
+            </p>
+          </div>
+        </div>
+
+        {/* CARD 4: VALOR JÁ GASTO */}
+        <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white p-5 rounded-2xl shadow-md relative overflow-hidden group">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-xl" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">Valor Já Gasto</span>
+            <div className="p-2.5 bg-slate-800 text-emerald-400 rounded-xl border border-slate-700">
+              <Coins className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-2xl sm:text-3xl font-black text-white">{formatCurrency(totalGasto)}</div>
+            <p className="text-[11px] font-medium text-slate-300 mt-1 flex items-center gap-1">
+              <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Custo acumulado em reparos/peças</span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* CHARTS SECTION */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* CHART 1: ACOMPANHAMENTO DE STATUS */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-2">
+                <BarChart2 className="w-5 h-5 text-[#D32F2F]" />
+                <h3 className="text-sm font-bold text-slate-900">Acompanhamento por Status</h3>
+              </div>
+              <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">
+                Total: {totalOrders} OS
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-500 mb-4">
+              Distribuição percentual das ordens de serviço por fase de atendimento.
+            </p>
+
+            {/* Visual Status Bars */}
+            <div className="space-y-3.5">
+              {/* Aberta */}
+              <div>
+                <div className="flex items-center justify-between text-xs font-semibold mb-1">
+                  <span className="text-slate-700 flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />
+                    Aberta
+                  </span>
+                  <span className="text-slate-900 font-bold">
+                    {countAbertas} OS ({totalOrders > 0 ? Math.round((countAbertas / totalOrders) * 100) : 0}%)
+                  </span>
+                </div>
+                <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+                  <div
+                    className="bg-red-500 h-full rounded-full transition-all duration-500"
+                    style={{ width: `${totalOrders > 0 ? (countAbertas / totalOrders) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Em Andamento */}
+              <div>
+                <div className="flex items-center justify-between text-xs font-semibold mb-1">
+                  <span className="text-slate-700 flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" />
+                    Em Andamento / Aguardando Peça
+                  </span>
+                  <span className="text-slate-900 font-bold">
+                    {countEmAndamento} OS ({totalOrders > 0 ? Math.round((countEmAndamento / totalOrders) * 100) : 0}%)
+                  </span>
+                </div>
+                <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+                  <div
+                    className="bg-blue-500 h-full rounded-full transition-all duration-500"
+                    style={{ width: `${totalOrders > 0 ? (countEmAndamento / totalOrders) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Concluída */}
+              <div>
+                <div className="flex items-center justify-between text-xs font-semibold mb-1">
+                  <span className="text-slate-700 flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
+                    Concluída
+                  </span>
+                  <span className="text-slate-900 font-bold">
+                    {countConcluidas} OS ({totalOrders > 0 ? Math.round((countConcluidas / totalOrders) * 100) : 0}%)
+                  </span>
+                </div>
+                <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+                  <div
+                    className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                    style={{ width: `${totalOrders > 0 ? (countConcluidas / totalOrders) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Cancelada */}
+              {countCanceladas > 0 && (
+                <div>
+                  <div className="flex items-center justify-between text-xs font-semibold mb-1">
+                    <span className="text-slate-700 flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-400 inline-block" />
+                      Cancelada
+                    </span>
+                    <span className="text-slate-900 font-bold">
+                      {countCanceladas} OS ({totalOrders > 0 ? Math.round((countCanceladas / totalOrders) * 100) : 0}%)
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+                    <div
+                      className="bg-rose-400 h-full rounded-full transition-all duration-500"
+                      style={{ width: `${totalOrders > 0 ? (countCanceladas / totalOrders) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+            <span>Eficiência do Atendimento:</span>
+            <span className="font-bold text-emerald-600">
+              {totalOrders > 0 ? Math.round((countConcluidas / totalOrders) * 100) : 0}% Concluídas
+            </span>
+          </div>
+        </div>
+
+        {/* CHART 2: GASTOS E ORDENS POR CATEGORIA */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-2">
+                <PieChart className="w-5 h-5 text-indigo-600" />
+                <h3 className="text-sm font-bold text-slate-900">Gastos e Volume por Categoria</h3>
+              </div>
+              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                Gasto: {formatCurrency(totalGasto)}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-500 mb-4">
+              Divisão de custos e quantidade de chamados abertos por tipo de manutenção.
+            </p>
+
+            <div className="space-y-3">
+              {categoryStats.map((cat) => (
+                <div key={cat.key} className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${cat.badgeColor}`}>
+                        {cat.label}
+                      </span>
+                      <span className="text-slate-600 font-medium">
+                        {cat.count} {cat.count === 1 ? 'ordem' : 'ordens'}
+                      </span>
+                    </div>
+
+                    <span className="font-bold text-slate-900">{formatCurrency(cat.spent)}</span>
+                  </div>
+
+                  <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                    <div
+                      className={`${cat.barColor} h-full rounded-full transition-all duration-500`}
+                      style={{ width: `${totalOrders > 0 ? (cat.count / totalOrders) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+            <span>Categoria com Maior Gasto:</span>
+            <span className="font-bold text-slate-800">
+              {categoryStats.reduce((max, c) => (c.spent > max.spent ? c : max), categoryStats[0]).label}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -425,9 +722,16 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
                   </div>
                 </div>
 
-                <h3 className="text-sm font-bold text-slate-900 group-hover:text-red-600 transition-colors line-clamp-2">
-                  {os.title}
-                </h3>
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="text-sm font-bold text-slate-900 group-hover:text-red-600 transition-colors line-clamp-2">
+                    {os.title}
+                  </h3>
+                  {typeof os.cost === 'number' && os.cost > 0 && (
+                    <span className="shrink-0 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg">
+                      {formatCurrency(os.cost)}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">
                   {os.description}
                 </p>
@@ -568,6 +872,24 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
                 </select>
               </div>
 
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Custo / Valor Estimado Inicial (R$) (Opcional)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2 text-xs font-bold text-slate-400">R$</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={costInput}
+                    onChange={(e) => setCostInput(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  />
+                </div>
+              </div>
+
               {/* Photo Capture using Camera or Gallery */}
               <ImageCaptureInput
                 label="Foto do Local / Equipamento Danificado (Câmera ou Galeria)"
@@ -620,7 +942,7 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
             </div>
 
             <div className="p-6 space-y-6 overflow-y-auto flex-1">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
                 <div>
                   <p className="text-slate-400 text-[10px] uppercase font-bold">Status Atual</p>
                   <div className="mt-1">{getStatusBadge(selectedOrder.status)}</div>
@@ -636,6 +958,44 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
                 <div>
                   <p className="text-slate-400 text-[10px] uppercase font-bold">Criado por</p>
                   <p className="font-semibold text-slate-800 mt-1">{selectedOrder.created_by_name}</p>
+                </div>
+                <div className="col-span-2 sm:col-span-1">
+                  <p className="text-slate-400 text-[10px] uppercase font-bold">Valor Gasto</p>
+                  {isEditingCost ? (
+                    <div className="flex items-center gap-1 mt-1">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={editCostVal}
+                        onChange={(e) => setEditCostVal(e.target.value)}
+                        className="w-20 px-1.5 py-0.5 border border-emerald-400 rounded text-xs font-bold text-emerald-800"
+                      />
+                      <button
+                        onClick={handleSaveCostEdit}
+                        className="px-2 py-0.5 bg-emerald-600 text-white font-bold text-[10px] rounded hover:bg-emerald-700"
+                      >
+                        Salvar
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 mt-1">
+                      <p className="font-bold text-emerald-700">
+                        {formatCurrency(selectedOrder.cost || 0)}
+                      </p>
+                      {isAdmin && (
+                        <button
+                          onClick={() => {
+                            setEditCostVal(String(selectedOrder.cost || 0));
+                            setIsEditingCost(true);
+                          }}
+                          className="text-[10px] font-bold text-blue-600 hover:underline ml-1"
+                        >
+                          (Editar)
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -847,6 +1207,24 @@ export const OrdensServico: React.FC<OrdensServicoProps> = ({ currentUser }) => 
                   placeholder="Descreva o reparo ou serviço efetuado, peças trocadas..."
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-600"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Valor Final Gasto no Conserto / Peças (R$)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2 text-xs font-bold text-slate-400">R$</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={conclusaoCusto}
+                    onChange={(e) => setConclusaoCusto(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                  />
+                </div>
               </div>
 
               {/* Photo of Repair */}

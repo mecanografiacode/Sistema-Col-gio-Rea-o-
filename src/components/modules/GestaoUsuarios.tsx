@@ -125,21 +125,27 @@ export const GestaoUsuarios: React.FC<GestaoUsuariosProps> = ({ currentUser }) =
     e.preventDefault();
     if (!editingUser || !fullName.trim() || !email.trim()) return;
 
-    await storage.updateProfile(
-      editingUser.id,
-      {
-        email: email.trim(),
-        full_name: fullName.trim(),
-        role,
-        department: department.trim(),
-        password: password.trim() || '123456',
-        is_active: isActive
-      },
-      currentUser
-    );
+    try {
+      await storage.updateProfile(
+        editingUser.id,
+        {
+          email: email.trim(),
+          full_name: fullName.trim(),
+          role,
+          department: department.trim(),
+          password: password.trim() || '123456',
+          is_active: isActive
+        },
+        currentUser
+      );
 
-    await loadData();
-    setEditingUser(null);
+      await loadData();
+      setEditingUser(null);
+      alert(`Dados do usuário ${fullName.trim()} atualizados com sucesso! Nova senha salva.`);
+    } catch (err) {
+      console.error('Erro ao atualizar usuário:', err);
+      alert('Ocorreu um erro ao salvar as alterações do usuário.');
+    }
   };
 
   const handleDeleteUser = async (userId: string) => {

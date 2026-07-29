@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { UserProfile, Teacher, SchoolClass, ScheduleSlot, EducationalGroup, DayOfWeek, TimeBlock, Subject } from '../../types';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Plus, Trash2, Edit2, AlertCircle, Save, Download, CalendarClock, Wand2 } from 'lucide-react';
+import { Plus, Trash2, Edit2, AlertCircle, Save, Download, CalendarClock, Wand2, Eye, Pencil, X, Check } from 'lucide-react';
 import { storage } from '../../lib/storage';
 
 const normalizeTime = (t: string): string => {
@@ -115,15 +115,46 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
 
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'super_admin';
 
+  const handleResetAllData = async () => {
+    if (!confirm('Atenção: Deseja apagar TODOS os dados do Editor de Horários (professores, turmas, disciplinas, horários agendados e blocos de tempo)? Esta ação excluirá os registros de teste no Supabase e no armazenamento local.')) {
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await storage.clearAllScheduleData();
+      setTeachers([]);
+      setClasses([]);
+      setSubjects([]);
+      setScheduleSlots([]);
+      setTimeBlocks([]);
+      alert('Todos os dados de teste foram apagados com sucesso! O sistema está pronto do zero.');
+    } catch (err) {
+      console.error('Erro ao resetar dados:', err);
+      alert('Erro ao apagar dados.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 font-serif-editorial">Editor de Horários</h2>
           <p className="text-sm text-slate-500 mt-1">
             Visualização e gestão da grade horária
           </p>
         </div>
+        {isAdmin && (
+          <button
+            onClick={handleResetAllData}
+            className="self-start sm:self-auto bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-700 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 hover:border-red-200 flex items-center gap-1.5 transition-all shadow-2xs"
+            title="Limpar todos os dados e horários de teste do banco de dados"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Limpar Dados de Teste (Zerar Sistema)
+          </button>
+        )}
       </div>
 
       {/* Tabs */}
@@ -145,7 +176,7 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
 
       <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 min-h-[500px]">
         {activeTab === 'professores' && (
-          <TeacherManager teachers={teachers} setTeachers={setTeachers} subjects={subjects} />
+          <TeacherManager teachers={teachers} setTeachers={setTeachers} subjects={subjects} classes={classes} />
         )}
         {activeTab === 'turmas' && (
           <ClassManager classes={classes} setClasses={setClasses} subjects={subjects} />
@@ -170,34 +201,146 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
 };
 
 // --- Teacher Manager ---
-function TeacherManager({ teachers, setTeachers, subjects }: { teachers: Teacher[], setTeachers: React.Dispatch<React.SetStateAction<Teacher[]>>, subjects: Subject[] }) {
+function TeacherManager({ 
+  teachers, 
+  setTeachers, 
+  subjects, 
+  classes 
+}: { 
+  teachers: Teacher[], 
+  setTeachers: React.Dispatch<React.SetStateAction<Teacher[]>>, 
+  subjects: Subject[],
+  classes: SchoolClass[] 
+}) {
+  const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null);
+  const [viewingTeacher, setViewingTeacher] = useState<Teacher | null>(null);
+
   const [newTeacherName, setNewTeacherName] = useState('');
   const [newTeacherSubjects, setNewTeacherSubjects] = useState<string[]>([]);
-  const [newTeacherDays, setNewTeacherDays] = useState<DayOfWeek[]>(['segunda', 'terca', 'quarta', 'quinta', 'sexta']);
   const [newTeacherShift, setNewTeacherShift] = useState<'matutino' | 'vespertino' | 'ambos'>('ambos');
-  const [newTeacherGroups, setNewTeacherGroups] = useState<EducationalGroup[]>([]);
+  const [newTeacherGroups, setNewTeacherGroups] = useState<EducationalGroup[]>(['anos_finais', 'ensino_medio']);
+  const [newTeacherClassIds, setNewTeacherClassIds] = useState<string[]>([]);
 
-  const allDays: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+  const daysList: { id: DayOfWeek; label: string; short: string }[] = [
+    { id: 'segunda', label: 'Segunda-feira', short: 'Seg' },
+    { id: 'terca', label: 'Terça-feira', short: 'Ter' },
+    { id: 'quarta', label: 'Quarta-feira', short: 'Qua' },
+    { id: 'quinta', label: 'Quinta-feira', short: 'Qui' },
+    { id: 'sexta', label: 'Sexta-feira', short: 'Sex' }
+  ];
+  const slotsList = [1, 2, 3, 4, 5, 6];
+
+  const createDefaultGrid = () => {
+    const grid: { [key: string]: boolean } = {};
+    daysList.forEach(d => {
+      slotsList.forEach(s => {
+        grid[`${d.id}-${s}`] = true;
+      });
+    });
+    return grid;
+  };
+
+  const [availabilityGrid, setAvailabilityGrid] = useState<{ [key: string]: boolean }>(createDefaultGrid());
+
+  // Segmentos restritos apenas a Anos Finais e Ensino Médio
   const allGroups: { id: EducationalGroup, label: string }[] = [
-    { id: 'infantil', label: 'Infantil' },
-    { id: 'anos_iniciais', label: 'Anos Iniciais' },
     { id: 'anos_finais', label: 'Anos Finais' },
     { id: 'ensino_medio', label: 'Ensino Médio' }
   ];
 
-  const toggleDay = (day: DayOfWeek) => {
-    if (newTeacherDays.includes(day)) {
-      setNewTeacherDays(newTeacherDays.filter(d => d !== day));
-    } else {
-      setNewTeacherDays([...newTeacherDays, day]);
+  const startEditing = (teacher: Teacher) => {
+    setEditingTeacherId(teacher.id);
+    setNewTeacherName(teacher.name);
+    setNewTeacherSubjects(teacher.subjects || []);
+    setNewTeacherShift(teacher.availability_shift || 'ambos');
+    setNewTeacherGroups(teacher.groups || ['anos_finais', 'ensino_medio']);
+    setNewTeacherClassIds(teacher.class_ids || []);
+    
+    // Grid recovery
+    let grid = createDefaultGrid();
+    if (teacher.availability_grid && Object.keys(teacher.availability_grid).length > 0) {
+      grid = { ...grid, ...teacher.availability_grid };
     }
+    setAvailabilityGrid(grid);
+
+    // Scroll to form smoothly
+    document.getElementById('teacher-form-header')?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  const cancelEditing = () => {
+    setEditingTeacherId(null);
+    setNewTeacherName('');
+    setNewTeacherSubjects([]);
+    setNewTeacherShift('ambos');
+    setNewTeacherGroups(['anos_finais', 'ensino_medio']);
+    setNewTeacherClassIds([]);
+    setAvailabilityGrid(createDefaultGrid());
+  };
+
+  const toggleGridCell = (day: DayOfWeek, slot: number) => {
+    const key = `${day}-${slot}`;
+    setAvailabilityGrid(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
+
+  const setAllGridCells = (val: boolean) => {
+    const updated: { [key: string]: boolean } = {};
+    daysList.forEach(d => {
+      slotsList.forEach(s => {
+        updated[`${d.id}-${s}`] = val;
+      });
+    });
+    setAvailabilityGrid(updated);
+  };
+
+  const invertGridCells = () => {
+    setAvailabilityGrid(prev => {
+      const updated: { [key: string]: boolean } = {};
+      daysList.forEach(d => {
+        slotsList.forEach(s => {
+          updated[`${d.id}-${s}`] = !prev[`${d.id}-${s}`];
+        });
+      });
+      return updated;
+    });
+  };
+
+  const totalAvailableCount = Object.values(availabilityGrid).filter(Boolean).length;
 
   const toggleSubject = (subjectName: string) => {
     if (newTeacherSubjects.includes(subjectName)) {
       setNewTeacherSubjects(newTeacherSubjects.filter(s => s !== subjectName));
     } else {
       setNewTeacherSubjects([...newTeacherSubjects, subjectName]);
+    }
+  };
+
+  const toggleClass = (classId: string) => {
+    if (newTeacherClassIds.includes(classId)) {
+      setNewTeacherClassIds(newTeacherClassIds.filter(id => id !== classId));
+    } else {
+      setNewTeacherClassIds([...newTeacherClassIds, classId]);
+    }
+  };
+
+  // Filter classes according to selected shift and educational group(s)
+  const filteredClasses = classes.filter(c => {
+    const cShift = getClassShift(c);
+    const matchShift = newTeacherShift === 'ambos' || cShift === 'ambos' || cShift === newTeacherShift;
+    const matchGroup = newTeacherGroups.length === 0 || newTeacherGroups.includes(c.group);
+    return matchShift && matchGroup;
+  });
+
+  const toggleAllClasses = () => {
+    const filteredIds = filteredClasses.map(c => c.id);
+    const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => newTeacherClassIds.includes(id));
+
+    if (allFilteredSelected) {
+      setNewTeacherClassIds(prev => prev.filter(id => !filteredIds.includes(id)));
+    } else {
+      setNewTeacherClassIds(prev => Array.from(new Set([...prev, ...filteredIds])));
     }
   };
 
@@ -209,32 +352,63 @@ function TeacherManager({ teachers, setTeachers, subjects }: { teachers: Teacher
     }
   };
 
-  const addTeacher = () => {
-    if (!newTeacherName.trim() || newTeacherSubjects.length === 0 || newTeacherDays.length === 0 || newTeacherGroups.length === 0) return;
+  const saveTeacher = () => {
+    if (!newTeacherName.trim() || newTeacherSubjects.length === 0 || newTeacherGroups.length === 0) return;
 
-    setTeachers([
-      ...teachers,
-      {
-        id: crypto.randomUUID(),
-        name: newTeacherName,
-        subjects: newTeacherSubjects,
-        groups: newTeacherGroups,
-        available_days: newTeacherDays,
-        availability_shift: newTeacherShift,
-        created_at: new Date().toISOString()
-      }
-    ]);
-    setNewTeacherName('');
-    setNewTeacherSubjects([]);
-    setNewTeacherDays(['segunda', 'terca', 'quarta', 'quinta', 'sexta']);
-    setNewTeacherShift('ambos');
-    setNewTeacherGroups([]);
+    const derivedDays = daysList.map(d => d.id).filter(dayId => 
+      slotsList.some(s => availabilityGrid[`${dayId}-${s}`] !== false)
+    );
+
+    const derivedSlots = slotsList.filter(s => 
+      daysList.some(d => availabilityGrid[`${d.id}-${s}`] !== false)
+    );
+
+    if (editingTeacherId) {
+      // Update existing
+      setTeachers(teachers.map(t => {
+        if (t.id === editingTeacherId) {
+          return {
+            ...t,
+            name: newTeacherName.trim(),
+            subjects: newTeacherSubjects,
+            groups: newTeacherGroups,
+            class_ids: newTeacherClassIds,
+            available_days: derivedDays.length > 0 ? derivedDays : ['segunda', 'terca', 'quarta', 'quinta', 'sexta'],
+            availability_shift: newTeacherShift,
+            available_slots: derivedSlots.length > 0 ? derivedSlots : [1, 2, 3, 4, 5, 6],
+            availability_grid: availabilityGrid
+          };
+        }
+        return t;
+      }));
+      cancelEditing();
+    } else {
+      // Create new
+      setTeachers([
+        ...teachers,
+        {
+          id: crypto.randomUUID(),
+          name: newTeacherName.trim(),
+          subjects: newTeacherSubjects,
+          groups: newTeacherGroups,
+          class_ids: newTeacherClassIds,
+          available_days: derivedDays.length > 0 ? derivedDays : ['segunda', 'terca', 'quarta', 'quinta', 'sexta'],
+          availability_shift: newTeacherShift,
+          available_slots: derivedSlots.length > 0 ? derivedSlots : [1, 2, 3, 4, 5, 6],
+          availability_grid: availabilityGrid,
+          created_at: new Date().toISOString()
+        }
+      ]);
+      cancelEditing();
+    }
   };
 
   const removeTeacher = async (id: string) => {
     try {
       await storage.deleteTeacher(id);
       setTeachers(teachers.filter(t => t.id !== id));
+      if (editingTeacherId === id) cancelEditing();
+      if (viewingTeacher?.id === id) setViewingTeacher(null);
     } catch (err: any) {
       console.error('Erro retornado pelo Supabase ao deletar professor:', err?.message || err);
     }
@@ -242,86 +416,82 @@ function TeacherManager({ teachers, setTeachers, subjects }: { teachers: Teacher
 
   return (
     <div className="space-y-6">
-      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col gap-4">
-        <div className="flex flex-col sm:flex-row gap-4 items-end">
-          <div className="flex-1 w-full">
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Nome do Professor</label>
+      {/* Container de Cadastro / Edição de Professor */}
+      <div id="teacher-form-header" className={`p-5 rounded-2xl border flex flex-col gap-5 shadow-sm transition-all ${
+        editingTeacherId ? 'bg-amber-50/50 border-amber-300' : 'bg-emerald-50/40 border-emerald-200/80'
+      }`}>
+        <div className="flex items-center justify-between border-b pb-3 border-slate-200/80">
+          <div>
+            <h3 className={`text-lg font-bold font-serif-editorial flex items-center gap-2 ${
+              editingTeacherId ? 'text-amber-900' : 'text-emerald-900'
+            }`}>
+              <span className={`w-2.5 h-2.5 rounded-full inline-block ${
+                editingTeacherId ? 'bg-amber-600 animate-pulse' : 'bg-emerald-600'
+              }`}></span>
+              {editingTeacherId ? `Editando Professor: ${newTeacherName || 'Sem nome'}` : 'Cadastro de Professor'}
+            </h3>
+            <p className="text-xs text-slate-600 mt-0.5">
+              {editingTeacherId 
+                ? 'Altere os campos abaixo e clique em "Salvar Alterações"' 
+                : 'Defina o nome, disciplinas, turno, turmas e a grade de disponibilidade horária'}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {editingTeacherId && (
+              <button
+                type="button"
+                onClick={cancelEditing}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                Cancelar Edição
+              </button>
+            )}
+            <span className={`text-white text-[11px] font-bold px-3 py-1 rounded-full uppercase tracking-wider ${
+              editingTeacherId ? 'bg-amber-600' : 'bg-emerald-600'
+            }`}>
+              {editingTeacherId ? 'Edição' : 'Novo'}
+            </span>
+          </div>
+        </div>
+
+        {/* Linha 1: Nome do Professor, Turno & Segmentos */}
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-start">
+          <div className="sm:col-span-5">
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Nome do Professor <span className="text-red-500">*</span></label>
             <input
               type="text"
-              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none"
-              placeholder="Ex: João Silva"
+              className="w-full px-3.5 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none text-sm font-medium"
+              placeholder="Ex: GEOMETRIA 6º e 7º / Carlos Silva"
               value={newTeacherName}
               onChange={(e) => setNewTeacherName(e.target.value)}
             />
           </div>
-          <div className="flex-1 w-full">
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Disciplinas</label>
-            <div className="flex flex-wrap gap-2">
-              {subjects.map(subject => (
-                <button
-                  key={subject.id}
-                  onClick={() => toggleSubject(subject.name)}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors ${
-                    newTeacherSubjects.includes(subject.name)
-                      ? 'bg-blue-50 border-blue-200 text-blue-700'
-                      : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
-                  }`}
-                >
-                  {subject.name}
-                </button>
-              ))}
-              {subjects.length === 0 && (
-                <span className="text-xs text-slate-400 italic py-1.5">Nenhuma disciplina cadastrada. Vá na aba Disciplinas.</span>
-              )}
-            </div>
-          </div>
-        </div>
-        
-        <div className="flex flex-col sm:flex-row gap-4 items-end">
-          <div className="w-full sm:w-1/3 border-r border-slate-200 pr-4 mr-4">
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Turno</label>
+
+          <div className="sm:col-span-3">
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Turno <span className="text-red-500">*</span></label>
             <select
-              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none"
+              className="w-full px-3.5 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none text-sm font-medium"
               value={newTeacherShift}
               onChange={(e) => setNewTeacherShift(e.target.value as 'matutino' | 'vespertino' | 'ambos')}
             >
               <option value="matutino">Matutino</option>
               <option value="vespertino">Vespertino</option>
-              <option value="ambos">Ambos</option>
+              <option value="ambos">Ambos (Manhã e Tarde)</option>
             </select>
           </div>
 
-          <div className="flex-1 w-full">
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Dias Disponíveis</label>
-            <div className="flex flex-wrap gap-2">
-              {allDays.map(day => (
-                <button
-                  key={day}
-                  onClick={() => toggleDay(day)}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg border capitalize transition-colors ${
-                    newTeacherDays.includes(day)
-                      ? 'bg-red-50 border-red-200 text-red-700'
-                      : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
-                  }`}
-                >
-                  {day}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-4 items-end">
-          <div className="flex-1 w-full">
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Segmentos de Atuação</label>
+          <div className="sm:col-span-4">
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Segmentos de Atuação <span className="text-red-500">*</span></label>
             <div className="flex flex-wrap gap-2">
               {allGroups.map(group => (
                 <button
                   key={group.id}
+                  type="button"
                   onClick={() => toggleGroup(group.id)}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors ${
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all ${
                     newTeacherGroups.includes(group.id)
-                      ? 'bg-blue-50 border-blue-200 text-blue-700'
+                      ? 'bg-emerald-600 border-emerald-700 text-white shadow-sm'
                       : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
                   }`}
                 >
@@ -330,81 +500,440 @@ function TeacherManager({ teachers, setTeachers, subjects }: { teachers: Teacher
               ))}
             </div>
           </div>
-          
+        </div>
+
+        {/* Linha 2: Disciplinas & Turmas */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Disciplinas que Leciona <span className="text-red-500">*</span></label>
+            <div className="flex flex-wrap gap-1.5 bg-white p-2.5 rounded-lg border border-slate-200 min-h-[42px] max-h-[120px] overflow-y-auto">
+              {subjects.map(subject => (
+                <button
+                  key={subject.id}
+                  type="button"
+                  onClick={() => toggleSubject(subject.name)}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-md border transition-colors ${
+                    newTeacherSubjects.includes(subject.name)
+                      ? 'bg-emerald-100 border-emerald-300 text-emerald-800'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {subject.name}
+                </button>
+              ))}
+              {subjects.length === 0 && (
+                <span className="text-xs text-slate-400 italic">Nenhuma disciplina cadastrada. Vá na aba Disciplinas.</span>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-slate-700 uppercase">
+                Turmas Atendidas
+              </label>
+              <button
+                type="button"
+                onClick={toggleAllClasses}
+                className="text-[11px] font-bold text-emerald-700 hover:underline"
+              >
+                {filteredClasses.length > 0 && filteredClasses.every(c => newTeacherClassIds.includes(c.id)) ? 'Desmarcar Visíveis' : 'Marcar Visíveis'}
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1.5 bg-white p-2.5 rounded-lg border border-slate-200 min-h-[42px] max-h-[120px] overflow-y-auto">
+              {filteredClasses.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => toggleClass(c.id)}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-md border transition-colors ${
+                    newTeacherClassIds.includes(c.id)
+                      ? 'bg-blue-100 border-blue-300 text-blue-800'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {c.name}
+                </button>
+              ))}
+              {filteredClasses.length === 0 && (
+                <span className="text-xs text-slate-400 italic">
+                  {classes.length === 0 ? 'Nenhuma turma cadastrada. Vá na aba Turmas.' : 'Nenhuma turma encontrada para o turno e segmento(s) selecionados.'}
+                </span>
+              )}
+            </div>
+            <p className="text-[10px] text-slate-400 mt-1">Se nenhuma turma for selecionada, o professor ficará disponível para todas as turmas dos seus segmentos.</p>
+          </div>
+        </div>
+
+        {/* Linha 3: Matriz de Disponibilidade */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row gap-6">
+          {/* Lado Esquerdo: Opções e Dicas */}
+          <div className="w-full md:w-5/12 flex flex-col justify-between space-y-4">
+            <div>
+              <fieldset className="border border-slate-200 p-3 rounded-lg bg-slate-50/50">
+                <legend className="text-xs font-bold text-slate-700 px-1 uppercase">Opções de Preenchimento</legend>
+                <div className="space-y-2 text-xs">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAllGridCells(true)}
+                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold transition-colors"
+                    >
+                      Disponível em Todos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAllGridCells(false)}
+                      className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-[11px] font-bold transition-colors"
+                    >
+                      Desmarcar Todos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={invertGridCells}
+                      className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[11px] font-bold transition-colors"
+                    >
+                      Inverter
+                    </button>
+                  </div>
+                </div>
+              </fieldset>
+
+              <div className="mt-3 p-2.5 bg-emerald-700 text-white rounded-lg text-xs font-semibold leading-relaxed">
+                O professor pode dar apenas uma aula por dia para cada turma.
+              </div>
+
+              <div className="mt-3 flex items-center justify-between text-xs font-bold text-emerald-800">
+                <span>Total de horários disponíveis:</span>
+                <span className="text-sm bg-emerald-100 px-2.5 py-0.5 rounded border border-emerald-300">{totalAvailableCount} de 30</span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+              <span className="font-bold text-slate-700 block text-[11px] uppercase">Legenda da Disponibilidade:</span>
+              <div className="flex items-center space-x-2">
+                <span className="w-4 h-4 rounded bg-white border border-slate-300 inline-block shadow-xs"></span>
+                <span>Está disponível</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <span className="w-4 h-4 rounded bg-slate-300 border border-slate-400 text-[10px] flex items-center justify-center font-bold text-slate-600">---</span>
+                <span>Não está disponível</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Lado Direito: Grade Tabela Hor x Seg, Ter, Qua, Qui, Sex */}
+          <div className="flex-1 overflow-x-auto">
+            <table className="w-full border-collapse border border-slate-300 text-center text-xs">
+              <thead>
+                <tr className="bg-slate-100 text-slate-700 font-bold uppercase text-[11px]">
+                  <th className="border border-slate-300 px-2 py-1.5 w-12 bg-slate-200/80">Hor</th>
+                  {daysList.map(d => (
+                    <th key={d.id} className="border border-slate-300 px-2 py-1.5">{d.short}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {slotsList.map(slot => (
+                  <tr key={slot}>
+                    <td className="border border-slate-300 px-1 py-1 font-bold bg-slate-100 text-slate-700 text-[11px]">
+                      0{slot}º
+                    </td>
+                    {daysList.map(d => {
+                      const isAvailable = availabilityGrid[`${d.id}-${slot}`] !== false;
+                      return (
+                        <td
+                          key={d.id}
+                          onClick={() => toggleGridCell(d.id, slot)}
+                          className={`border border-slate-300 p-1.5 cursor-pointer font-bold select-none transition-colors text-[11px] ${
+                            isAvailable
+                              ? 'bg-white hover:bg-emerald-50 text-emerald-700'
+                              : 'bg-slate-200 text-slate-500 hover:bg-slate-300'
+                          }`}
+                          title={`${d.label} - ${slot}º Horário: ${isAvailable ? 'Disponível' : 'Não disponível'}`}
+                        >
+                          {isAvailable ? '' : '---'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-[10px] text-slate-400 italic text-center mt-1.5">Clique na célula da tabela para alternar a disponibilidade do professor.</p>
+          </div>
+        </div>
+
+        {/* Botão Salvar / Alterar Professor */}
+        <div className="flex justify-end gap-2 pt-1">
+          {editingTeacherId && (
+            <button
+              type="button"
+              onClick={cancelEditing}
+              className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2.5 rounded-xl font-bold transition-all text-sm"
+            >
+              Cancelar
+            </button>
+          )}
           <button
-            onClick={addTeacher}
-            disabled={!newTeacherName.trim() || newTeacherSubjects.length === 0 || newTeacherDays.length === 0 || newTeacherGroups.length === 0}
-            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center h-[42px] shrink-0"
+            onClick={saveTeacher}
+            disabled={!newTeacherName.trim() || newTeacherSubjects.length === 0 || newTeacherGroups.length === 0}
+            className={`text-white px-6 py-2.5 rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center shadow-sm text-sm ${
+              editingTeacherId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'
+            }`}
           >
-            <Plus className="w-4 h-4 mr-2" />
-            Adicionar
+            {editingTeacherId ? (
+              <>
+                <Check className="w-4 h-4 mr-2" />
+                Salvar Alterações
+              </>
+            ) : (
+              <>
+                <Plus className="w-4 h-4 mr-2" />
+                Cadastrar Professor
+              </>
+            )}
           </button>
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      {/* Lista de Professores Cadastrados */}
+      <div className="overflow-x-auto rounded-xl border border-slate-200">
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
             <tr>
-              <th className="px-4 py-3">Nome</th>
+              <th className="px-4 py-3">Nome do Professor</th>
               <th className="px-4 py-3">Segmentos</th>
               <th className="px-4 py-3">Disciplinas</th>
+              <th className="px-4 py-3">Turmas Atendidas</th>
               <th className="px-4 py-3">Disponibilidade</th>
-              <th className="px-4 py-3 w-24">Ações</th>
+              <th className="px-4 py-3 w-28 text-center">Ações</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
-            {teachers.map(teacher => (
-              <tr key={teacher.id} className="hover:bg-slate-50/50">
-                <td className="px-4 py-3 font-semibold text-slate-800">{teacher.name}</td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap gap-1">
-                    {teacher.groups?.map((g, i) => {
-                      const groupLabel = allGroups.find(ag => ag.id === g)?.label || g;
-                      return (
-                        <span key={i} className="bg-blue-50 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold">
-                          {groupLabel}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap gap-1">
-                    {teacher.subjects.map((sub, i) => (
-                      <span key={i} className="bg-slate-100 text-slate-700 text-[10px] px-2 py-0.5 rounded-full font-bold">
-                        {sub}
-                      </span>
-                    ))}
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-col space-y-1">
-                    <span className="text-xs text-slate-600 capitalize"><span className="font-bold">Turno:</span> {teacher.availability_shift}</span>
-                    <div className="flex gap-1 mt-1">
-                      {teacher.available_days?.map(d => (
-                        <span key={d} className="bg-slate-100 text-slate-500 text-[9px] px-1.5 py-0.5 rounded font-bold capitalize">
-                          {d.slice(0, 3)}
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {teachers.map(teacher => {
+              const assignedClasses = classes.filter(c => teacher.class_ids?.includes(c.id));
+              const availCount = teacher.availability_grid 
+                ? Object.values(teacher.availability_grid).filter(Boolean).length 
+                : 30;
+
+              return (
+                <tr key={teacher.id} className="hover:bg-slate-50/80 transition-colors group">
+                  <td 
+                    onClick={() => setViewingTeacher(teacher)}
+                    className="px-4 py-3 font-semibold text-slate-800 cursor-pointer group-hover:text-emerald-700 flex items-center gap-2"
+                  >
+                    <span>{teacher.name}</span>
+                    <Eye className="w-3.5 h-3.5 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </td>
+                  <td className="px-4 py-3 cursor-pointer" onClick={() => setViewingTeacher(teacher)}>
+                    <div className="flex flex-wrap gap-1">
+                      {teacher.groups?.map((g, i) => {
+                        const groupLabel = allGroups.find(ag => ag.id === g)?.label || g;
+                        return (
+                          <span key={i} className="bg-emerald-50 text-emerald-800 text-[10px] px-2 py-0.5 rounded-full font-bold border border-emerald-100">
+                            {groupLabel}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 cursor-pointer" onClick={() => setViewingTeacher(teacher)}>
+                    <div className="flex flex-wrap gap-1">
+                      {teacher.subjects.map((sub, i) => (
+                        <span key={i} className="bg-slate-100 text-slate-700 text-[10px] px-2 py-0.5 rounded-full font-bold">
+                          {sub}
                         </span>
                       ))}
                     </div>
-                  </div>
-                </td>
-                <td className="px-4 py-3 align-top">
-                  <button onClick={() => removeTeacher(teacher.id)} className="text-red-500 hover:text-red-700 p-1">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="px-4 py-3 cursor-pointer" onClick={() => setViewingTeacher(teacher)}>
+                    {assignedClasses.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {assignedClasses.map(c => (
+                          <span key={c.id} className="bg-blue-50 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold border border-blue-100">
+                            {c.name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400 italic">Todas as turmas dos segmentos</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 cursor-pointer" onClick={() => setViewingTeacher(teacher)}>
+                    <div className="flex flex-col space-y-0.5">
+                      <span className="text-xs text-slate-600 capitalize"><span className="font-bold">Turno:</span> {teacher.availability_shift}</span>
+                      <span className="text-[11px] font-bold text-emerald-700">{availCount} / 30 horários disponíveis</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 align-middle text-center">
+                    <div className="flex items-center justify-center space-x-1">
+                      <button 
+                        onClick={() => setViewingTeacher(teacher)} 
+                        className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors" 
+                        title="Visualizar Grade e Detalhes"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => startEditing(teacher)} 
+                        className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" 
+                        title="Editar Professor"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => removeTeacher(teacher.id)} 
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" 
+                        title="Excluir Professor"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
             {teachers.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-slate-500">Nenhum professor cadastrado.</td>
+                <td colSpan={6} className="px-4 py-8 text-center text-slate-500">Nenhum professor cadastrado ainda.</td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+
+      {/* Modal de Visualização de Professor */}
+      {viewingTeacher && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-2xl w-full p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between border-b pb-4 border-slate-200">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-md border border-emerald-200">
+                  Ficha do Professor
+                </span>
+                <h3 className="text-xl font-bold text-slate-900 mt-1">{viewingTeacher.name}</h3>
+                <p className="text-xs text-slate-500">Turno: <span className="font-semibold text-slate-700 capitalize">{viewingTeacher.availability_shift}</span></p>
+              </div>
+              <button 
+                onClick={() => setViewingTeacher(null)} 
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <span className="font-bold text-slate-700 uppercase block mb-1">Segmentos de Atuação</span>
+                <div className="flex flex-wrap gap-1">
+                  {viewingTeacher.groups?.map((g, i) => (
+                    <span key={i} className="bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded">
+                      {allGroups.find(ag => ag.id === g)?.label || g}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <span className="font-bold text-slate-700 uppercase block mb-1">Disciplinas</span>
+                <div className="flex flex-wrap gap-1">
+                  {viewingTeacher.subjects?.map((sub, i) => (
+                    <span key={i} className="bg-slate-200 text-slate-800 font-bold px-2 py-0.5 rounded">
+                      {sub}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="sm:col-span-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <span className="font-bold text-slate-700 uppercase block mb-1">Turmas Atendidas</span>
+                <div className="flex flex-wrap gap-1">
+                  {classes.filter(c => viewingTeacher.class_ids?.includes(c.id)).map(c => (
+                    <span key={c.id} className="bg-blue-100 text-blue-800 font-bold px-2.5 py-0.5 rounded">
+                      {c.name}
+                    </span>
+                  ))}
+                  {(!viewingTeacher.class_ids || viewingTeacher.class_ids.length === 0) && (
+                    <span className="text-slate-500 italic">Disponível para todas as turmas dos segmentos.</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Matriz de Disponibilidade */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase text-slate-700">Grade Horária de Disponibilidade</span>
+                <span className="text-xs font-bold text-emerald-700">
+                  {viewingTeacher.availability_grid 
+                    ? Object.values(viewingTeacher.availability_grid).filter(Boolean).length 
+                    : 30} / 30 horários disponíveis
+                </span>
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full border-collapse text-center text-xs">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-700 font-bold uppercase text-[10px]">
+                      <th className="border border-slate-200 px-2 py-1.5 w-12 bg-slate-200/80">Hor</th>
+                      {daysList.map(d => (
+                        <th key={d.id} className="border border-slate-200 px-2 py-1.5">{d.short}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {slotsList.map(slot => (
+                      <tr key={slot}>
+                        <td className="border border-slate-200 px-1 py-1 font-bold bg-slate-50 text-slate-700 text-[10px]">
+                          0{slot}º
+                        </td>
+                        {daysList.map(d => {
+                          const grid = viewingTeacher.availability_grid || {};
+                          const isAvailable = grid[`${d.id}-${slot}`] !== false;
+                          return (
+                            <td
+                              key={d.id}
+                              className={`border border-slate-200 p-1.5 font-bold text-[10px] ${
+                                isAvailable
+                                  ? 'bg-emerald-50 text-emerald-700'
+                                  : 'bg-slate-200 text-slate-400'
+                              }`}
+                            >
+                              {isAvailable ? 'SIM' : '---'}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  const t = viewingTeacher;
+                  setViewingTeacher(null);
+                  startEditing(t);
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 transition-colors"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                Editar este Professor
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingTeacher(null)}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-4 py-2 rounded-xl transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -568,7 +1097,7 @@ function ClassManager({ classes, setClasses, subjects }: { classes: SchoolClass[
               <tr>
                 <th className="px-4 py-3">Nome da Turma</th>
                 <th className="px-4 py-3">Segmento</th>
-                <th className="px-4 py-3">Carga Horária (Disciplinas)</th>
+                <th className="px-4 py-3">Carga Horária (Aulas)</th>
                 <th className="px-4 py-3 w-32">Ações</th>
               </tr>
             </thead>
@@ -597,7 +1126,7 @@ function ClassManager({ classes, setClasses, subjects }: { classes: SchoolClass[
                     <div className="flex flex-wrap gap-1 max-w-md">
                       {Object.entries(c.subject_workloads || {}).map(([sub, hours]) => (
                         <span key={sub} className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[10px] font-semibold">
-                          {sub}: {hours}h
+                          {sub}: {hours} {hours === 1 ? 'aula' : 'aulas'}
                         </span>
                       ))}
                       {(!c.subject_workloads || Object.keys(c.subject_workloads).length === 0) && (
@@ -659,7 +1188,7 @@ function ClassManager({ classes, setClasses, subjects }: { classes: SchoolClass[
             </div>
 
             <div className="border-t border-slate-100 pt-3">
-              <label className="text-[11px] font-bold text-slate-700 uppercase mb-2 block">Carga Horária Semanal</label>
+              <label className="text-[11px] font-bold text-slate-700 uppercase mb-2 block">Carga Horária Semanal (Aulas)</label>
               <div className="space-y-2.5 max-h-[200px] overflow-y-auto pr-1">
                 {Object.entries(editingWorkloads).map(([subject, hours]) => {
                   const h = hours as number;
@@ -673,7 +1202,7 @@ function ClassManager({ classes, setClasses, subjects }: { classes: SchoolClass[
                         >
                           -
                         </button>
-                        <span className="w-8 text-center font-bold text-slate-800">{h}h</span>
+                        <span className="min-w-14 text-center font-bold text-slate-800">{h} {h === 1 ? 'aula' : 'aulas'}</span>
                         <button 
                           onClick={() => updateSubjectHours(subject, h + 1)} 
                           className="w-5 h-5 rounded bg-white hover:bg-slate-100 border text-slate-600 font-bold flex items-center justify-center text-[10px] shadow-sm"
@@ -843,16 +1372,36 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
   const [cellTeacherId, setCellTeacherId] = useState('');
   const [cellSubject, setCellSubject] = useState('');
 
-  // Automatically populate 6 default time blocks with intervals if none exist for this class
+  // Automatically populate default time blocks (or inherit from same shift) if none exist for this class
   useEffect(() => {
     if (!selectedClassId) return;
     const currentClass = classes.find(c => c.id === selectedClassId);
     if (!currentClass) return;
-    const isAfternoon = getClassShift(currentClass) === 'vespertino';
+    const currentShift = getClassShift(currentClass);
+    const isAfternoon = currentShift === 'vespertino';
 
     setTimeBlocks(prev => {
       const existing = prev.filter(tb => tb.class_id === selectedClassId);
       if (existing.length === 0) {
+        // Look for another class in the same shift that already has time blocks configured
+        const siblingClass = classes.find(c => c.id !== selectedClassId && getClassShift(c) === currentShift);
+        const siblingBlocks = siblingClass 
+          ? prev.filter(tb => tb.class_id === siblingClass.id).sort((a, b) => a.start_time.localeCompare(b.start_time)) 
+          : [];
+
+        if (siblingBlocks.length > 0) {
+          return [
+            ...prev,
+            ...siblingBlocks.map(tb => ({
+              id: crypto.randomUUID(),
+              class_id: selectedClassId,
+              start_time: tb.start_time,
+              end_time: tb.end_time,
+              is_interval: tb.is_interval
+            }))
+          ];
+        }
+
         if (isAfternoon) {
           return [
             ...prev,
@@ -913,12 +1462,13 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     const blocks = classTimeBlocks.filter(b => !b.is_interval);
     const days: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
 
-    // 3. Prepare teachers that can teach each subject and are aligned to this segment (educational group)
+    // 3. Prepare teachers that can teach each subject and are aligned to this segment (educational group) and class
     const teachersBySubject: { [subject: string]: Teacher[] } = {};
     subjectPool.forEach(item => {
       teachersBySubject[item.subject] = teachers.filter(t => 
         t.subjects.includes(item.subject) && 
-        t.groups.includes(currentClass.group)
+        t.groups.includes(currentClass.group) &&
+        (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(currentClass.id))
       );
     });
 
@@ -953,13 +1503,31 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       return hasConflictInCurrent;
     };
 
-    // Helper to check if a teacher is available on a specific day & shift
+    // Helper to check if a teacher is available on a specific day & shift & slot
     const isTeacherAvailable = (teacher: Teacher, day: DayOfWeek, block: TimeBlock) => {
       if (!teacher.available_days?.includes(day)) return false;
       const startHour = parseInt(normalizeTime(block.start_time).split(':')[0]);
       const isMorning = startHour < 13;
       if (teacher.availability_shift === 'matutino' && !isMorning) return false;
       if (teacher.availability_shift === 'vespertino' && isMorning) return false;
+
+      const slotIndex = blocks.findIndex(b => b.id === block.id) + 1;
+
+      // Check slot position availability (1º, 2º, 3º, etc.)
+      if (teacher.available_slots && teacher.available_slots.length > 0 && teacher.available_slots.length < 6) {
+        if (slotIndex > 0 && !teacher.available_slots.includes(slotIndex)) {
+          return false;
+        }
+      }
+
+      // Check detailed matrix grid availability (e.g. "segunda-1", "terca-3", etc.)
+      if (teacher.availability_grid && Object.keys(teacher.availability_grid).length > 0) {
+        const key = `${day}-${slotIndex}`;
+        if (teacher.availability_grid[key] === false) {
+          return false;
+        }
+      }
+
       return true;
     };
 
@@ -1105,97 +1673,173 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
 
   const handleAddTimeBlock = () => {
     const currentClass = classes.find(c => c.id === selectedClassId);
-    const isAfternoon = currentClass ? getClassShift(currentClass) === 'vespertino' : false;
-    setTimeBlocks([
-      ...timeBlocks,
-      {
+    if (!currentClass) return;
+    const currentShift = getClassShift(currentClass);
+    const isAfternoon = currentShift === 'vespertino';
+
+    const defaultStart = isAfternoon ? '13:10' : '07:30';
+    const defaultEnd = isAfternoon ? '14:00' : '08:20';
+
+    const sameShiftClasses = classes.filter(c => getClassShift(c) === currentShift);
+
+    setTimeBlocks(prev => [
+      ...prev,
+      ...sameShiftClasses.map(c => ({
         id: crypto.randomUUID(),
-        class_id: selectedClassId,
-        start_time: isAfternoon ? '13:10' : '07:30',
-        end_time: isAfternoon ? '14:00' : '08:20'
-      }
+        class_id: c.id,
+        start_time: defaultStart,
+        end_time: defaultEnd
+      }))
     ]);
   };
 
   const handleAddIntervalBlock = () => {
     const currentClass = classes.find(c => c.id === selectedClassId);
-    const isAfternoon = currentClass ? getClassShift(currentClass) === 'vespertino' : false;
-    setTimeBlocks([
-      ...timeBlocks,
-      {
+    if (!currentClass) return;
+    const currentShift = getClassShift(currentClass);
+    const isAfternoon = currentShift === 'vespertino';
+
+    const defaultStart = isAfternoon ? '14:50' : '09:00';
+    const defaultEnd = isAfternoon ? '15:10' : '09:20';
+
+    const sameShiftClasses = classes.filter(c => getClassShift(c) === currentShift);
+
+    setTimeBlocks(prev => [
+      ...prev,
+      ...sameShiftClasses.map(c => ({
         id: crypto.randomUUID(),
-        class_id: selectedClassId,
-        start_time: isAfternoon ? '14:50' : '09:00',
-        end_time: isAfternoon ? '15:10' : '09:20',
+        class_id: c.id,
+        start_time: defaultStart,
+        end_time: defaultEnd,
         is_interval: true
-      }
+      }))
     ]);
   };
 
   const handleResetDefaultBlocks = () => {
-    if (!confirm('Tem certeza de que deseja resetar os horários desta turma para o padrão de 6 aulas com 2 intervalos? Todos os agendamentos desta turma serão apagados.')) {
+    const currentClass = classes.find(c => c.id === selectedClassId);
+    if (!currentClass) return;
+    const currentShift = getClassShift(currentClass);
+
+    if (!confirm(`Tem certeza de que deseja resetar os horários de TODAS as turmas do turno ${currentShift.toUpperCase()} para o padrão de 6 aulas com 2 intervalos?`)) {
       return;
     }
-    // Remove slots of this class
-    setScheduleSlots(slots => slots.filter(s => s.class_id !== selectedClassId));
-    
-    const currentClass = classes.find(c => c.id === selectedClassId);
-    const isAfternoon = currentClass ? getClassShift(currentClass) === 'vespertino' : false;
 
-    // Set default blocks with intervals
+    const sameShiftClasses = classes.filter(c => getClassShift(c) === currentShift);
+    const sameShiftClassIds = new Set(sameShiftClasses.map(c => c.id));
+
+    // Remove slots of all same-shift classes
+    setScheduleSlots(slots => slots.filter(s => !sameShiftClassIds.has(s.class_id)));
+
+    const isAfternoon = currentShift === 'vespertino';
+
     setTimeBlocks(prev => {
-      const filtered = prev.filter(tb => tb.class_id !== selectedClassId);
-      if (isAfternoon) {
-        return [
-          ...filtered,
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '13:10', end_time: '14:00' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '14:00', end_time: '14:50' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '14:50', end_time: '15:10', is_interval: true },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '15:10', end_time: '16:00' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '16:00', end_time: '16:50' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '16:50', end_time: '17:10', is_interval: true },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '17:10', end_time: '18:00' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '18:00', end_time: '18:50' }
-        ];
-      } else {
-        return [
-          ...filtered,
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '07:20', end_time: '08:10' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '08:10', end_time: '09:00' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:00', end_time: '09:20', is_interval: true },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:20', end_time: '10:10' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '10:10', end_time: '11:00' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:00', end_time: '11:20', is_interval: true },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:20', end_time: '12:10' },
-          { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '12:10', end_time: '13:00' }
-        ];
-      }
+      const filtered = prev.filter(tb => !sameShiftClassIds.has(tb.class_id));
+      const newBlocks: TimeBlock[] = [];
+
+      sameShiftClasses.forEach(c => {
+        if (isAfternoon) {
+          newBlocks.push(
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '13:10', end_time: '14:00' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '14:00', end_time: '14:50' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '14:50', end_time: '15:10', is_interval: true },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '15:10', end_time: '16:00' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '16:00', end_time: '16:50' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '16:50', end_time: '17:10', is_interval: true },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '17:10', end_time: '18:00' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '18:00', end_time: '18:50' }
+          );
+        } else {
+          newBlocks.push(
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '07:20', end_time: '08:10' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '08:10', end_time: '09:00' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '09:00', end_time: '09:20', is_interval: true },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '09:20', end_time: '10:10' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '10:10', end_time: '11:00' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '11:00', end_time: '11:20', is_interval: true },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '11:20', end_time: '12:10' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '12:10', end_time: '13:00' }
+          );
+        }
+      });
+
+      return [...filtered, ...newBlocks];
     });
   };
 
   const updateTimeBlock = (id: string, field: 'start_time' | 'end_time', value: string) => {
-    setTimeBlocks(timeBlocks.map(tb => tb.id === id ? { ...tb, [field]: value } : tb));
-    // Ideally we should also update existing scheduleSlots that match this time block, 
-    // but for simplicity we rely on the block itself. Wait, if we change the time, the slots will disconnect.
-    // Let's update the slots too.
-    const oldBlock = timeBlocks.find(tb => tb.id === id);
-    if (oldBlock) {
-      setScheduleSlots(slots => slots.map(s => {
-        if (s.class_id === selectedClassId && s.start_time === oldBlock.start_time && s.end_time === oldBlock.end_time) {
-          return { ...s, [field]: value };
+    const targetBlock = timeBlocks.find(tb => tb.id === id);
+    if (!targetBlock) return;
+
+    const currentClass = classes.find(c => c.id === selectedClassId);
+    if (!currentClass) return;
+
+    const currentShift = getClassShift(currentClass);
+    const sortedCurrent = classTimeBlocks;
+    const blockIndex = sortedCurrent.findIndex(tb => tb.id === id);
+    const oldValue = targetBlock[field];
+
+    if (blockIndex === -1) return;
+
+    const sameShiftClasses = classes.filter(c => getClassShift(c) === currentShift);
+    const sameShiftClassIds = new Set(sameShiftClasses.map(c => c.id));
+
+    setTimeBlocks(prev => {
+      return prev.map(tb => {
+        if (sameShiftClassIds.has(tb.class_id)) {
+          const sortedClassBlocks = prev
+            .filter(b => b.class_id === tb.class_id)
+            .sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+          if (sortedClassBlocks[blockIndex]?.id === tb.id) {
+            return { ...tb, [field]: value };
+          }
         }
-        return s;
-      }));
-    }
+        return tb;
+      });
+    });
+
+    setScheduleSlots(slots => slots.map(s => {
+      if (sameShiftClassIds.has(s.class_id) && s[field] === oldValue) {
+        return { ...s, [field]: value };
+      }
+      return s;
+    }));
   };
 
   const removeTimeBlock = (id: string) => {
     const block = timeBlocks.find(tb => tb.id === id);
-    if (block) {
-      // Remove all slots for this block
-      setScheduleSlots(slots => slots.filter(s => !(s.class_id === selectedClassId && s.start_time === block.start_time && s.end_time === block.end_time)));
-    }
-    setTimeBlocks(timeBlocks.filter(tb => tb.id !== id));
+    if (!block) return;
+
+    const currentClass = classes.find(c => c.id === selectedClassId);
+    if (!currentClass) return;
+
+    const currentShift = getClassShift(currentClass);
+    const blockIndex = classTimeBlocks.findIndex(tb => tb.id === id);
+
+    const sameShiftClasses = classes.filter(c => getClassShift(c) === currentShift);
+    const sameShiftClassIds = new Set(sameShiftClasses.map(c => c.id));
+
+    const idsToRemove = new Set<string>();
+    timeBlocks.forEach(tb => {
+      if (sameShiftClassIds.has(tb.class_id)) {
+        const sorted = timeBlocks
+          .filter(b => b.class_id === tb.class_id)
+          .sort((a, b) => a.start_time.localeCompare(b.start_time));
+        if (sorted[blockIndex]?.id === tb.id) {
+          idsToRemove.add(tb.id);
+        }
+      }
+    });
+
+    setScheduleSlots(slots => slots.filter(s => {
+      if (sameShiftClassIds.has(s.class_id)) {
+        return !(s.start_time === block.start_time && s.end_time === block.end_time);
+      }
+      return true;
+    }));
+
+    setTimeBlocks(prev => prev.filter(tb => !idsToRemove.has(tb.id)));
   };
 
   const saveCell = (block: TimeBlock, day: DayOfWeek) => {
@@ -1222,6 +1866,19 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       ) {
         if (!confirm(`Atenção: O professor tem disponibilidade apenas no turno ${teacher.availability_shift}. Deseja adicionar mesmo assim?`)) {
           return;
+        }
+      }
+
+      // Validate Slot Position (1º, 2º, 3º, etc.)
+      if (teacher.available_slots && teacher.available_slots.length > 0 && teacher.available_slots.length < 6) {
+        const nonIntervalBlocks = classTimeBlocks
+          .filter(b => !b.is_interval)
+          .sort((a, b) => a.start_time.localeCompare(b.start_time));
+        const slotIndex = nonIntervalBlocks.findIndex(b => b.id === block.id) + 1;
+        if (slotIndex > 0 && !teacher.available_slots.includes(slotIndex)) {
+          if (!confirm(`Atenção: O professor ${teacher.name} não tem disponibilidade cadastrada no ${slotIndex}º horário. Deseja adicionar mesmo assim?`)) {
+            return;
+          }
         }
       }
 

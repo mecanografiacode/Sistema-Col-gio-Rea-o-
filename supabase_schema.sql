@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS service_orders (
     foto_conclusao_url TEXT,
     concluded_at TIMESTAMP WITH TIME ZONE,
     concluded_notes TEXT,
+    cost NUMERIC(10,2) DEFAULT 0,
     comments JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
@@ -200,6 +201,9 @@ CREATE TABLE IF NOT EXISTS teachers (
     workload_hours INT DEFAULT 0,
     available_days TEXT[] DEFAULT '{}',
     availability_shift TEXT DEFAULT 'ambos' CHECK (availability_shift IN ('matutino', 'vespertino', 'ambos')),
+    available_slots INT[] DEFAULT '{}',
+    class_ids TEXT[] DEFAULT '{}',
+    availability_grid JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -232,6 +236,14 @@ CREATE TABLE IF NOT EXISTS time_blocks (
     is_interval BOOLEAN DEFAULT false
 );
 
+-- 17. Tabela de Disciplinas (subjects) - Editor de Horários
+CREATE TABLE IF NOT EXISTS subjects (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    color TEXT DEFAULT '#3b82f6',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
 -- ==============================================================================
 -- ROW LEVEL SECURITY (RLS) — POLICIAIS DE ACESSO ABERTAS PARA O CLIENTE PWA
 -- ==============================================================================
@@ -250,6 +262,7 @@ ALTER TABLE teachers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE classes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE schedule_slots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE time_blocks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subjects ENABLE ROW LEVEL SECURITY;
 
 -- Políticas universais de acesso para o aplicativo PWA interno
 CREATE POLICY "Permitir acesso completo a profiles" ON profiles FOR ALL USING (true) WITH CHECK (true);
@@ -267,6 +280,7 @@ CREATE POLICY "Permitir acesso completo a teachers" ON teachers FOR ALL USING (t
 CREATE POLICY "Permitir acesso completo a classes" ON classes FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Permitir acesso completo a schedule_slots" ON schedule_slots FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Permitir acesso completo a time_blocks" ON time_blocks FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Permitir acesso completo a subjects" ON subjects FOR ALL USING (true) WITH CHECK (true);
 
 -- ==============================================================================
 -- DADOS INICIAIS (SEED) PARA O COLEGIO REAÇÃO
