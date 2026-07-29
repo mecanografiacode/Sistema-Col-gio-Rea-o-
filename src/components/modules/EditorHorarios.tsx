@@ -1947,6 +1947,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
 
       let meetingsPool = [...trialMeetings];
       let scheduledCount = 0;
+      let totalPenalty = 0;
 
       const sortPool = () => {
         meetingsPool.sort((a, b) => {
@@ -1977,22 +1978,18 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           teacher: Teacher;
           day: DayOfWeek;
           blockIndex: number;
+          penalty: number;
           score: number;
         }
         let candidates: Candidate[] = [];
 
         qTeachers.forEach(t => {
-          const currentHours = getTeacherAssignedHours(t.id);
-          if (currentHours + m.size > (t.workload_hours || 20)) return;
-
           days.forEach(day => {
             const dayLessonsCount = trialRunningSlots.filter(s =>
               s.class_id === cls.id &&
               s.day_of_week === day &&
               s.subject === m.subject
             ).length;
-
-            if (dayLessonsCount + m.size > 2) return;
 
             const maxIndex = m.size === 2 ? clsBlocks.length - 2 : clsBlocks.length - 1;
             for (let i = 0; i <= maxIndex; i++) {
@@ -2017,8 +2014,6 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
               );
               if (hasTeacherConflict1) continue;
 
-              if (!isTeacherAvailable(t, day, b1, clsBlocks)) continue;
-
               if (m.size === 2) {
                 const b2 = clsBlocks[i + 1];
                 const isSlot2Occupied = trialRunningSlots.some(s =>
@@ -2034,19 +2029,77 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                   timesOverlap(s.start_time, s.end_time, b2.start_time, b2.end_time)
                 );
                 if (hasTeacherConflict2) continue;
+              }
 
-                if (!isTeacherAvailable(t, day, b2, clsBlocks)) continue;
+              // Satisfies physical hard constraints. Now compute penalties.
+              let penalty = 0;
+
+              // 1. Teacher available days
+              if (!t.available_days?.includes(day)) {
+                penalty += 1000;
+              }
+
+              // 2. Teacher shift
+              const startHour = parseInt(normalizeTime(b1.start_time).split(':')[0]);
+              const isMorning = startHour < 13;
+              if (t.availability_shift === 'matutino' && !isMorning) {
+                penalty += 2000;
+              }
+              if (t.availability_shift === 'vespertino' && isMorning) {
+                penalty += 2000;
+              }
+
+              // 3. Teacher available slots & grid
+              const slotIndex1 = i + 1;
+              if (t.available_slots && t.available_slots.length > 0 && t.available_slots.length < 6) {
+                if (!t.available_slots.includes(slotIndex1)) {
+                  penalty += 300;
+                }
+              }
+              if (t.availability_grid && Object.keys(t.availability_grid).length > 0) {
+                const key1 = `${day}-${slotIndex1}`;
+                if (t.availability_grid[key1] === false) {
+                  penalty += 500;
+                }
+              }
+
+              if (m.size === 2) {
+                const slotIndex2 = i + 2;
+                if (t.available_slots && t.available_slots.length > 0 && t.available_slots.length < 6) {
+                  if (!t.available_slots.includes(slotIndex2)) {
+                    penalty += 300;
+                  }
+                }
+                if (t.availability_grid && Object.keys(t.availability_grid).length > 0) {
+                  const key2 = `${day}-${slotIndex2}`;
+                  if (t.availability_grid[key2] === false) {
+                    penalty += 500;
+                  }
+                }
+              }
+
+              // 4. Teacher workload limit
+              const currentHours = getTeacherAssignedHours(t.id);
+              if (currentHours + m.size > (t.workload_hours || 20)) {
+                penalty += 1500;
+              }
+
+              // 5. Subject lessons count on the same day
+              if (dayLessonsCount + m.size > 2) {
+                penalty += 400;
               }
 
               const workloadRatio = currentHours / (t.workload_hours || 20);
-              const subjectDayScore = dayLessonsCount * 3;
-              const randomFactor = Math.random() * 0.2;
-              const score = workloadRatio * 15 + subjectDayScore + randomFactor;
+              const randomFactor = Math.random() * 0.1;
+
+              // Total score is dominated by penalty, with workloadRatio and randomFactor as tie-breakers
+              const score = penalty * 10000 + workloadRatio * 10 + randomFactor;
 
               candidates.push({
                 teacher: t,
                 day,
                 blockIndex: i,
+                penalty,
                 score
               });
             }
@@ -2082,6 +2135,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           }
 
           scheduledCount += m.size;
+          totalPenalty += best.penalty;
         } else {
           if (m.size === 2) {
             meetingsPool.push({
@@ -2122,6 +2176,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       return {
         trialScheduledOverall: scheduledCount,
         totalDemanded,
+        totalPenalty,
         score: trialScore,
         trialRunningSlots,
         trialClassResults
@@ -2138,8 +2193,14 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     // Find the maximum allocation achieved in any trial
     const maxScheduled = Math.max(...trials.map(t => t.trialScheduledOverall));
 
-    // Filter trials that reached the best score
-    const bestTrials = trials.filter(t => t.trialScheduledOverall === maxScheduled);
+    // Filter trials that reached the best allocation
+    const bestAllocationTrials = trials.filter(t => t.trialScheduledOverall === maxScheduled);
+
+    // Among those with the best allocation, find the minimum total penalty
+    const minPenalty = Math.min(...bestAllocationTrials.map(t => t.totalPenalty));
+
+    // Filter trials that have the minimum penalty (or within a tiny margin)
+    const bestTrials = bestAllocationTrials.filter(t => t.totalPenalty <= minPenalty + 5);
 
     // Randomly select one of the top-performing trials to ensure a fresh, beautifully scattered layout on every click
     const bestResult = bestTrials[Math.floor(Math.random() * bestTrials.length)];
