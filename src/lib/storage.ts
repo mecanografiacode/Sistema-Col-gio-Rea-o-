@@ -332,23 +332,7 @@ class StorageService {
             this.setItem(cacheKey, data as T[], false);
             return data as T[];
           } else {
-            // Table in Supabase is empty (0 rows). Check if we have seed/local data to migrate to Supabase.
-            const localItems = this.getItem<T>(cacheKey);
-            const itemsToSeed = localItems && localItems.length > 0 ? localItems : initialSeedData;
-            if (itemsToSeed && itemsToSeed.length > 0) {
-              const sanitizedSeed = itemsToSeed.map((it) => this.sanitizeItemForSupabase(it));
-              const { error: seedErr } = await supabase.from(tableName).insert(sanitizedSeed as any);
-              if (!seedErr) {
-                this.setItem(cacheKey, itemsToSeed, false);
-                return itemsToSeed;
-              } else if (seedErr) {
-                if (seedErr.message?.includes('Failed to fetch')) {
-                  markSupabaseOffline(seedErr.message);
-                } else {
-                  console.warn(`Supabase auto-seed warning for ${tableName}:`, seedErr.message);
-                }
-              }
-            }
+            // Table in Supabase is empty (0 rows). Respect manual deletion and keep empty.
             this.setItem(cacheKey, [], false);
             return [];
           }

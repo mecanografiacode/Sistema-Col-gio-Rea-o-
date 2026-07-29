@@ -19,15 +19,21 @@ const timesOverlap = (start1: string, end1: string, start2: string, end2: string
 };
 
 const getClassShift = (c: SchoolClass): 'matutino' | 'vespertino' | 'ambos' => {
-  if (c.shift) return c.shift;
+  if (c.shift && c.shift !== 'ambos') return c.shift;
   const upperName = c.name.toUpperCase().trim();
-  if (upperName.endsWith('A') || upperName.includes(' A ') || upperName.endsWith('-A')) {
+  if (upperName.includes('VESP') || upperName.includes('TARDE') || upperName.includes('VESPERTINO')) {
+    return 'vespertino';
+  }
+  if (upperName.includes('MAT') || upperName.includes('MANHÃ') || upperName.includes('MATUTINO')) {
     return 'matutino';
   }
   if (upperName.endsWith('B') || upperName.includes(' B ') || upperName.endsWith('-B')) {
     return 'vespertino';
   }
-  return 'ambos';
+  if (upperName.endsWith('A') || upperName.includes(' A ') || upperName.endsWith('-A')) {
+    return 'matutino';
+  }
+  return c.shift || 'matutino';
 };
 
 const extractBaseGrade = (className: string): string => {
@@ -59,6 +65,17 @@ const DEFAULT_MEDIO_WORKLOAD = {};
 const DEFAULT_CLASSES: SchoolClass[] = [];
 
 const DEFAULT_TEACHERS: Teacher[] = [];
+
+const is678Grade = (className: string) => {
+  const norm = className.toLowerCase();
+  if (norm.includes('9º') || norm.includes('9°') || norm.includes('9 ano') || norm.includes('médio') || norm.includes('medio') || norm.includes('9a') || norm.includes('9b')) {
+    return false;
+  }
+  return norm.includes('6º') || norm.includes('6°') || norm.includes('6 ano') || norm.includes('6a') || norm.includes('6b') ||
+         norm.includes('7º') || norm.includes('7°') || norm.includes('7 ano') || norm.includes('7a') || norm.includes('7b') ||
+         norm.includes('8º') || norm.includes('8°') || norm.includes('8 ano') || norm.includes('8a') || norm.includes('8b') ||
+         /\b(6|7|8)\b/.test(norm);
+};
 
 interface EditorHorariosProps {
   currentUser: UserProfile;
@@ -1411,6 +1428,24 @@ function SubjectManager({ subjects, setSubjects }: { subjects: Subject[], setSub
   );
 }
 
+// Helper to convert time HH:MM to minutes since midnight for chronological sorting
+const timeToMinutes = (timeStr: string): number => {
+  if (!timeStr) return 0;
+  const parts = timeStr.split(':');
+  const h = parseInt(parts[0] || '0', 10);
+  const m = parseInt(parts[1] || '0', 10);
+  return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
+};
+
+// Helper to normalize time string to HH:MM format
+const normalizeTimeStr = (timeStr: string): string => {
+  if (!timeStr) return '00:00';
+  const parts = timeStr.split(':');
+  const h = String(parseInt(parts[0] || '0', 10)).padStart(2, '0');
+  const m = String(parseInt(parts[1] || '0', 10)).padStart(2, '0');
+  return `${h}:${m}`;
+};
+
 // --- Schedule Manager ---
 function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, timeBlocks, setTimeBlocks, isAdmin }: { 
   teachers: Teacher[], 
@@ -1430,353 +1465,616 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     type: 'success' | 'warning' | 'error';
     details?: string[];
   } | null>(null);
+
+  // Modals for Auto-schedule scope and Export scope
+  const [isAutoModalOpen, setIsAutoModalOpen] = useState(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   
   // Cell edit state
   const [cellTeacherId, setCellTeacherId] = useState('');
   const [cellSubject, setCellSubject] = useState('');
 
-  // Automatically populate default time blocks (or inherit from same shift) if none exist for this class
+  // Automatically populate default time blocks for any class (and sync same shift), plus deduplicate corrupt/duplicate blocks
   useEffect(() => {
-    if (!selectedClassId) return;
-    const currentClass = classes.find(c => c.id === selectedClassId);
-    if (!currentClass) return;
-    const currentShift = getClassShift(currentClass);
-    const isAfternoon = currentShift === 'vespertino';
+    if (classes.length === 0) return;
 
     setTimeBlocks(prev => {
-      const existing = prev.filter(tb => tb.class_id === selectedClassId);
-      if (existing.length === 0) {
-        // Look for another class in the same shift that already has time blocks configured
-        const siblingClass = classes.find(c => c.id !== selectedClassId && getClassShift(c) === currentShift);
-        const siblingBlocks = siblingClass 
-          ? prev.filter(tb => tb.class_id === siblingClass.id).sort((a, b) => a.start_time.localeCompare(b.start_time)) 
-          : [];
+      let updated = false;
+      const nextMap = new Map<string, TimeBlock[]>();
 
-        if (siblingBlocks.length > 0) {
-          return [
-            ...prev,
-            ...siblingBlocks.map(tb => ({
-              id: crypto.randomUUID(),
-              class_id: selectedClassId,
-              start_time: tb.start_time,
-              end_time: tb.end_time,
-              is_interval: tb.is_interval
-            }))
-          ];
-        }
-
-        if (isAfternoon) {
-          return [
-            ...prev,
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '13:10', end_time: '14:00' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '14:00', end_time: '14:50' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '14:50', end_time: '15:10', is_interval: true },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '15:10', end_time: '16:00' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '16:00', end_time: '16:50' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '16:50', end_time: '17:10', is_interval: true },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '17:10', end_time: '18:00' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '18:00', end_time: '18:50' }
-          ];
+      // Group existing blocks by class_id and remove duplicates/mismatched shifts
+      prev.forEach(tb => {
+        const list = nextMap.get(tb.class_id) || [];
+        const normalizedStart = normalizeTimeStr(tb.start_time);
+        const normalizedEnd = normalizeTimeStr(tb.end_time);
+        const isDup = list.some(existing => 
+          normalizeTimeStr(existing.start_time) === normalizedStart && 
+          normalizeTimeStr(existing.end_time) === normalizedEnd
+        );
+        if (!isDup) {
+          list.push({
+            ...tb,
+            start_time: normalizedStart,
+            end_time: normalizedEnd
+          });
         } else {
-          return [
-            ...prev,
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '07:20', end_time: '08:10' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '08:10', end_time: '09:00' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:00', end_time: '09:20', is_interval: true },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '09:20', end_time: '10:10' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '10:10', end_time: '11:00' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:00', end_time: '11:20', is_interval: true },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '11:20', end_time: '12:10' },
-            { id: crypto.randomUUID(), class_id: selectedClassId, start_time: '12:10', end_time: '13:00' }
-          ];
+          updated = true;
         }
-      }
-      return prev;
+        nextMap.set(tb.class_id, list);
+      });
+
+      // Populate or validate classes
+      classes.forEach(c => {
+        const clsShift = getClassShift(c);
+        const isAfternoon = clsShift === 'vespertino';
+        const existing = nextMap.get(c.id) || [];
+
+        // Check if existing blocks violate shift (e.g. vespertino class with morning start times < 12:00)
+        const hasShiftViolation = existing.length > 0 && existing.some(tb => {
+          const hour = parseInt(normalizeTime(tb.start_time).split(':')[0], 10);
+          return isAfternoon ? hour < 12 : hour >= 12;
+        });
+
+        if (existing.length === 0 || hasShiftViolation) {
+          updated = true;
+          const sibling = classes.find(other => {
+            if (other.id === c.id) return false;
+            if (getClassShift(other) !== clsShift) return false;
+            const oBlocks = nextMap.get(other.id) || [];
+            if (oBlocks.length === 0) return false;
+            const oHour = parseInt(normalizeTime(oBlocks[0].start_time).split(':')[0], 10);
+            return isAfternoon ? oHour >= 12 : oHour < 12;
+          });
+          const siblingBlocks = sibling ? nextMap.get(sibling.id)! : [];
+
+          const template = siblingBlocks.length > 0 ? siblingBlocks : (
+            isAfternoon ? [
+              { start_time: '13:10', end_time: '14:00', is_interval: false },
+              { start_time: '14:00', end_time: '14:50', is_interval: false },
+              { start_time: '14:50', end_time: '15:40', is_interval: false },
+              { start_time: '15:40', end_time: '16:00', is_interval: true },
+              { start_time: '16:00', end_time: '16:50', is_interval: false },
+              { start_time: '16:50', end_time: '17:40', is_interval: false },
+              { start_time: '17:40', end_time: '18:30', is_interval: false }
+            ] : [
+              { start_time: '07:20', end_time: '08:10', is_interval: false },
+              { start_time: '08:10', end_time: '09:00', is_interval: false },
+              { start_time: '09:00', end_time: '09:20', is_interval: true },
+              { start_time: '09:20', end_time: '10:10', is_interval: false },
+              { start_time: '10:10', end_time: '11:00', is_interval: false },
+              { start_time: '11:00', end_time: '11:20', is_interval: true },
+              { start_time: '11:20', end_time: '12:10', is_interval: false },
+              { start_time: '12:10', end_time: '13:00', is_interval: false }
+            ]
+          );
+
+          const newForC: TimeBlock[] = template.map(tb => ({
+            id: crypto.randomUUID(),
+            class_id: c.id,
+            start_time: normalizeTimeStr(tb.start_time),
+            end_time: normalizeTimeStr(tb.end_time),
+            is_interval: !!tb.is_interval
+          }));
+          nextMap.set(c.id, newForC);
+        }
+      });
+
+      if (!updated) return prev;
+      const allNew: TimeBlock[] = [];
+      nextMap.forEach(list => allNew.push(...list));
+      return allNew;
     });
   }, [selectedClassId, classes, setTimeBlocks]);
 
-  const classTimeBlocks = timeBlocks.filter(tb => tb.class_id === selectedClassId)
-    .sort((a, b) => a.start_time.localeCompare(b.start_time));
+  const classTimeBlocks = timeBlocks
+    .filter(tb => tb.class_id === selectedClassId)
+    .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
 
-  const autoOrganizeSchedule = () => {
-    if (!selectedClassId) return;
-    const currentClass = classes.find(c => c.id === selectedClassId);
-    if (!currentClass) return;
-
-    // Clear any previous status
+  // --- AUTOMATIC ORGANIZER (MULTIPLE SCOPES & CONFLICT WARNINGS) ---
+  const runAutoOrganize = (scope: 'selected' | 'shift' | 'all') => {
+    setIsAutoModalOpen(false);
     setScheduleStatus(null);
 
-    // 1. Get the subject workloads for the class
-    let workloads = currentClass.subject_workloads;
-    if (!workloads || Object.keys(workloads).length === 0) {
-      workloads = currentClass.group === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
-                  currentClass.group === 'anos_iniciais' ? DEFAULT_INICIAIS_WORKLOAD :
-                  currentClass.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
+    if (classes.length === 0) {
+      setScheduleStatus({
+        message: 'Nenhuma turma cadastrada no sistema.',
+        type: 'error'
+      });
+      return;
     }
 
-    // 2. Build the pool of remaining lessons
-    const subjectPool: { subject: string, remaining: number }[] = Object.entries(workloads)
-      .map(([subject, hours]) => ({ subject, remaining: hours }))
-      .filter(item => item.remaining > 0);
+    const currentClass = classes.find(c => c.id === selectedClassId);
+    const currentShift = currentClass ? getClassShift(currentClass) : 'matutino';
 
-    const totalDemanded = subjectPool.reduce((sum, item) => sum + item.remaining, 0);
+    let targetClasses: SchoolClass[] = [];
+    if (scope === 'selected') {
+      if (!currentClass) {
+        alert('Selecione uma turma primeiro!');
+        return;
+      }
+      targetClasses = [currentClass];
+    } else if (scope === 'shift') {
+      targetClasses = classes.filter(c => getClassShift(c) === currentShift);
+    } else {
+      targetClasses = classes;
+    }
 
-    // Get time blocks for this class, excluding intervals
-    const blocks = classTimeBlocks.filter(b => !b.is_interval);
+    if (targetClasses.length === 0) {
+      setScheduleStatus({
+        message: 'Nenhuma turma encontrada para o escopo selecionado.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    // Ensure time blocks exist for all target classes
+    let activeTimeBlocks = [...timeBlocks];
+    targetClasses.forEach(cls => {
+      const clsBlocks = activeTimeBlocks.filter(tb => tb.class_id === cls.id);
+      if (clsBlocks.length === 0) {
+        const clsShift = getClassShift(cls);
+        const isAfternoon = clsShift === 'vespertino';
+        const defaultBlocks: TimeBlock[] = isAfternoon ? [
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '13:10', end_time: '14:00' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '14:00', end_time: '14:50' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '14:50', end_time: '15:40' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '15:40', end_time: '16:00', is_interval: true },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '16:00', end_time: '16:50' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '16:50', end_time: '17:40' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '17:40', end_time: '18:30' }
+        ] : [
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '07:20', end_time: '08:10' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '08:10', end_time: '09:00' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '09:00', end_time: '09:20', is_interval: true },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '09:20', end_time: '10:10' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '10:10', end_time: '11:00' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '11:00', end_time: '11:20', is_interval: true },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '11:20', end_time: '12:10' },
+          { id: crypto.randomUUID(), class_id: cls.id, start_time: '12:10', end_time: '13:00' }
+        ];
+        activeTimeBlocks.push(...defaultBlocks);
+      }
+    });
+    setTimeBlocks(activeTimeBlocks);
+
+    const targetClassIds = new Set(targetClasses.map(c => c.id));
+    let runningSlots = scheduleSlots.filter(s => !targetClassIds.has(s.class_id));
+
+    let totalDemandedOverall = 0;
+    let scheduledWithTeacherOverall = 0;
+    const logDetails: string[] = [];
     const days: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
 
-    // 3. Prepare teachers that can teach each subject and are aligned to this segment (educational group) and class
-    const teachersBySubject: { [subject: string]: Teacher[] } = {};
-    subjectPool.forEach(item => {
-      teachersBySubject[item.subject] = teachers.filter(t => 
-        t.subjects.includes(item.subject) && 
-        t.groups.includes(currentClass.group) &&
-        (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(currentClass.id))
-      );
-    });
+    // Multi-trial optimizer function for generating the schedule
+    const runTrial = (seed: number) => {
+      let trialRunningSlots = [...runningSlots];
+      let trialScheduledOverall = 0;
+      const trialClassResults: { classId: string, cells: { block: TimeBlock, day: DayOfWeek, assigned: boolean, subject: string, teacher_id: string }[], scheduled: number, demanded: number }[] = [];
 
-    // 4. Prepare list of temporary slots (preserve other classes, rewrite this class's slots)
-    const otherClassesSlots = scheduleSlots.filter(s => s.class_id !== selectedClassId);
+        // Shuffle or sort targetClasses slightly based on seed
+        const sortedTargetClasses = [...targetClasses].sort((a, b) => {
+          if (seed === 0) return 0;
+          return ((a.id.charCodeAt(0) + seed) % 3) - ((b.id.charCodeAt(0) + seed) % 3);
+        });
 
-    // List all cells: (day, block) sorted by day then block
-    const cells: { block: TimeBlock, day: DayOfWeek, assigned: boolean, subject: string, teacher_id: string }[] = [];
-    days.forEach(day => {
-      blocks.forEach(block => {
-        cells.push({ block, day, assigned: false, subject: '', teacher_id: '' });
-      });
-    });
+        for (const cls of sortedTargetClasses) {
+          let workloads = cls.subject_workloads;
+          if (!workloads || Object.keys(workloads).length === 0) {
+            workloads = cls.group === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
+                        cls.group === 'anos_iniciais' ? DEFAULT_INICIAIS_WORKLOAD :
+                        cls.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
+          }
 
-    // Helper to check if a teacher has a conflict at a specific day/block
-    const hasTeacherConflict = (teacherId: string, day: DayOfWeek, block: TimeBlock) => {
-      // Check conflict in other classes' schedules
-      const hasConflictInOthers = otherClassesSlots.some(s => 
-        s.teacher_id === teacherId && 
-        s.day_of_week === day &&
-        timesOverlap(block.start_time, block.end_time, s.start_time, s.end_time)
-      );
-      if (hasConflictInOthers) return true;
+          const subjectPool = Object.entries(workloads)
+            .map(([subject, hours]) => ({ subject, remaining: hours }))
+            .filter(item => item.remaining > 0);
 
-      // Check conflict in already assigned cells of current class in this auto-scheduler run
-      const hasConflictInCurrent = cells.some(c => 
-        c.assigned && 
-        c.teacher_id === teacherId && 
-        c.day === day &&
-        timesOverlap(block.start_time, block.end_time, c.block.start_time, c.block.end_time)
-      );
-      return hasConflictInCurrent;
-    };
+          const clsDemanded = subjectPool.reduce((sum, item) => sum + item.remaining, 0);
 
-    // Helper to check if a teacher is available on a specific day & shift & slot
-    const isTeacherAvailable = (teacher: Teacher, day: DayOfWeek, block: TimeBlock) => {
-      if (!teacher.available_days?.includes(day)) return false;
-      const startHour = parseInt(normalizeTime(block.start_time).split(':')[0]);
-      const isMorning = startHour < 13;
-      if (teacher.availability_shift === 'matutino' && !isMorning) return false;
-      if (teacher.availability_shift === 'vespertino' && isMorning) return false;
+          const clsBlocks = activeTimeBlocks
+            .filter(b => b.class_id === cls.id && !b.is_interval)
+            .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
 
-      const slotIndex = blocks.findIndex(b => b.id === block.id) + 1;
+          const teachersBySubject: { [subject: string]: Teacher[] } = {};
+          subjectPool.forEach(item => {
+            teachersBySubject[item.subject] = teachers.filter(t => 
+              t.subjects.includes(item.subject) && 
+              t.groups.includes(cls.group) &&
+              (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(cls.id))
+            );
+          });
 
-      // Check slot position availability (1º, 2º, 3º, etc.)
-      if (teacher.available_slots && teacher.available_slots.length > 0 && teacher.available_slots.length < 6) {
-        if (slotIndex > 0 && !teacher.available_slots.includes(slotIndex)) {
-          return false;
+          const isTargetSpecialClass = is678Grade(cls.name);
+
+          const cells: { block: TimeBlock, day: DayOfWeek, assigned: boolean, subject: string, teacher_id: string }[] = [];
+          days.forEach(day => {
+            clsBlocks.forEach((block) => {
+              const nonIntervalIdx = clsBlocks.findIndex(b => b.id === block.id);
+              const is6thSlot = nonIntervalIdx >= 5;
+              const isRestrictedDay = day === 'segunda' || day === 'quarta' || day === 'sexta';
+
+              // Skip 6th slot on Mon/Wed/Fri for 6th, 7th, 8th grade
+              if (isTargetSpecialClass && isRestrictedDay && is6thSlot) {
+                return;
+              }
+
+              cells.push({ block, day, assigned: false, subject: '', teacher_id: '' });
+            });
+          });
+
+          const hasTeacherConflict = (teacherId: string, day: DayOfWeek, block: TimeBlock) => {
+            const conflictInRunning = trialRunningSlots.some(s => 
+              s.teacher_id === teacherId && 
+              s.day_of_week === day &&
+              timesOverlap(block.start_time, block.end_time, s.start_time, s.end_time)
+            );
+            if (conflictInRunning) return true;
+
+            return cells.some(c => 
+              c.assigned && 
+              c.teacher_id === teacherId && 
+              c.day === day &&
+              timesOverlap(block.start_time, block.end_time, c.block.start_time, c.block.end_time)
+            );
+          };
+
+          const isTeacherAvailable = (teacher: Teacher, day: DayOfWeek, block: TimeBlock) => {
+            if (!teacher.available_days?.includes(day)) return false;
+            const startHour = parseInt(normalizeTime(block.start_time).split(':')[0]);
+            const isMorning = startHour < 13;
+            if (teacher.availability_shift === 'matutino' && !isMorning) return false;
+            if (teacher.availability_shift === 'vespertino' && isMorning) return false;
+
+            const slotIndex = clsBlocks.findIndex(b => b.id === block.id) + 1;
+            if (teacher.available_slots && teacher.available_slots.length > 0 && teacher.available_slots.length < 6) {
+              if (slotIndex > 0 && !teacher.available_slots.includes(slotIndex)) {
+                return false;
+              }
+            }
+
+            if (teacher.availability_grid && Object.keys(teacher.availability_grid).length > 0) {
+              const key = `${day}-${slotIndex}`;
+              if (teacher.availability_grid[key] === false) {
+                return false;
+              }
+            }
+
+            return true;
+          };
+
+          const getTeacherAssignedHours = (teacherId: string) => {
+            const runningHours = trialRunningSlots.filter(s => s.teacher_id === teacherId).length;
+            const currentRunHours = cells.filter(c => c.assigned && c.teacher_id === teacherId).length;
+            return runningHours + currentRunHours;
+          };
+
+          const getSubjectTeacherFlexibility = (subj: string) => {
+            const pTeachers = teachersBySubject[subj] || [];
+            if (pTeachers.length === 0) return 9999;
+            
+            let minScore = 9999;
+            pTeachers.forEach(t => {
+              const daysCount = t.available_days?.length ?? 5;
+              const slotsCount = (t.available_slots && t.available_slots.length > 0) ? t.available_slots.length : 6;
+              let gridCount = 30;
+              if (t.availability_grid && Object.keys(t.availability_grid).length > 0) {
+                gridCount = Object.values(t.availability_grid).filter(v => v === true).length;
+              }
+              const score = daysCount * 100 + slotsCount * 10 + gridCount;
+              if (score < minScore) {
+                minScore = score;
+              }
+            });
+            return minScore;
+          };
+
+          // Sort subjects: highly restricted teachers first, with small seed variations
+          subjectPool.sort((a, b) => {
+            const flexA = getSubjectTeacherFlexibility(a.subject);
+            const flexB = getSubjectTeacherFlexibility(b.subject);
+            if (flexA !== flexB) return flexA - flexB;
+
+            const teachersA = teachersBySubject[a.subject]?.length || 0;
+            const teachersB = teachersBySubject[b.subject]?.length || 0;
+            if (teachersA !== teachersB) return teachersA - teachersB;
+
+            if (seed > 0 && (seed % 2 === 1)) {
+              return (a.subject.charCodeAt(0) % 5) - (b.subject.charCodeAt(0) % 5);
+            }
+
+            return b.remaining - a.remaining;
+          });
+
+          let clsScheduled = 0;
+          let doubleLessonsCount = 0;
+
+          subjectPool.forEach(poolItem => {
+            const subject = poolItem.subject;
+            const rawPossibleTeachers = teachersBySubject[subject] || [];
+            const possibleTeachers = [...rawPossibleTeachers].sort((t1, t2) => {
+              const days1 = t1.available_days?.length ?? 5;
+              const days2 = t2.available_days?.length ?? 5;
+              if (days1 !== days2) return days1 - days2;
+              return getTeacherAssignedHours(t1.id) - getTeacherAssignedHours(t2.id);
+            });
+
+            // Days order permuted slightly by seed
+            const daysList: DayOfWeek[] = seed % 3 === 1 
+              ? ['terca', 'quinta', 'segunda', 'quarta', 'sexta']
+              : seed % 3 === 2
+              ? ['quinta', 'quarta', 'terca', 'segunda', 'sexta']
+              : ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+
+            // --- Phase 1: Allocate Double Lessons (Aulas Geminadas) on days with 0 lessons of this subject ---
+            if (poolItem.remaining >= 2) {
+              for (let d of daysList) {
+                if (poolItem.remaining < 2) break;
+                const currentDayCount = cells.filter(cell => cell.assigned && cell.day === d && cell.subject === subject).length;
+                if (currentDayCount > 0) continue;
+
+                for (let i = 0; i < clsBlocks.length - 1; i++) {
+                  const b1 = clsBlocks[i];
+                  const b2 = clsBlocks[i + 1];
+                  const c1 = cells.find(c => c.day === d && c.block.id === b1.id);
+                  const c2 = cells.find(c => c.day === d && c.block.id === b2.id);
+
+                  if (c1 && !c1.assigned && c2 && !c2.assigned) {
+                    const availableTeacher = possibleTeachers.find(t => 
+                      isTeacherAvailable(t, d, c1.block) && 
+                      !hasTeacherConflict(t.id, d, c1.block) &&
+                      isTeacherAvailable(t, d, c2.block) && 
+                      !hasTeacherConflict(t.id, d, c2.block) &&
+                      getTeacherAssignedHours(t.id) + 1 < (t.workload_hours || 20)
+                    );
+
+                    if (availableTeacher) {
+                      c1.assigned = true;
+                      c1.subject = subject;
+                      c1.teacher_id = availableTeacher.id;
+
+                      c2.assigned = true;
+                      c2.subject = subject;
+                      c2.teacher_id = availableTeacher.id;
+
+                      poolItem.remaining -= 2;
+                      clsScheduled += 2;
+                      doubleLessonsCount++;
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+
+            // --- Phase 2: Spread single lessons across days with 0 lessons of this subject ---
+            if (poolItem.remaining > 0) {
+              for (let d of daysList) {
+                if (poolItem.remaining <= 0) break;
+                const currentDayCount = cells.filter(cell => cell.assigned && cell.day === d && cell.subject === subject).length;
+                if (currentDayCount > 0) continue;
+
+                for (let c of cells) {
+                  if (c.day !== d || c.assigned) continue;
+                  const availableTeacher = possibleTeachers.find(t => 
+                    isTeacherAvailable(t, c.day, c.block) && 
+                    !hasTeacherConflict(t.id, c.day, c.block) &&
+                    getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
+                  );
+
+                  if (availableTeacher) {
+                    c.assigned = true;
+                    c.subject = subject;
+                    c.teacher_id = availableTeacher.id;
+                    poolItem.remaining--;
+                    clsScheduled++;
+                    break;
+                  }
+                }
+              }
+            }
+
+            // --- Phase 3: Fill remaining up to MAX 2 LESSONS PER DAY on days with 1 lesson ---
+            if (poolItem.remaining > 0) {
+              for (let d of daysList) {
+                if (poolItem.remaining <= 0) break;
+                const currentDayCount = cells.filter(cell => cell.assigned && cell.day === d && cell.subject === subject).length;
+                if (currentDayCount >= 2) continue; // STRICT MAX 2 LESSONS PER DAY
+
+                for (let c of cells) {
+                  if (c.day !== d || c.assigned) continue;
+                  const availableTeacher = possibleTeachers.find(t => 
+                    isTeacherAvailable(t, c.day, c.block) && 
+                    !hasTeacherConflict(t.id, c.day, c.block) &&
+                    getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
+                  );
+
+                  if (availableTeacher) {
+                    c.assigned = true;
+                    c.subject = subject;
+                    c.teacher_id = availableTeacher.id;
+                    poolItem.remaining--;
+                    clsScheduled++;
+                    break;
+                  }
+                }
+              }
+            }
+
+            // --- Phase 4: Fallback Fill pass if any unassigned slots exist ---
+            if (poolItem.remaining > 0) {
+              for (let c of cells) {
+                if (poolItem.remaining <= 0) break;
+                if (c.assigned) continue;
+
+                const dayCount = cells.filter(cell => cell.assigned && cell.day === c.day && cell.subject === subject).length;
+                if (dayCount >= 2) continue; // STRICT MAX 2 LESSONS PER DAY
+
+                const availableTeacher = possibleTeachers.find(t => 
+                  isTeacherAvailable(t, c.day, c.block) && 
+                  !hasTeacherConflict(t.id, c.day, c.block) &&
+                  getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
+                );
+
+                if (availableTeacher) {
+                  c.assigned = true;
+                  c.subject = subject;
+                  c.teacher_id = availableTeacher.id;
+                  poolItem.remaining--;
+                  clsScheduled++;
+                }
+              }
+            }
+
+            // --- Phase 5: Aggressive Force Allocation (Zero Missing Hours Guarantee) ---
+            if (poolItem.remaining > 0) {
+              for (let c of cells) {
+                if (poolItem.remaining <= 0) break;
+                if (c.assigned) continue;
+
+                const availableTeacher = possibleTeachers.find(t => 
+                  !hasTeacherConflict(t.id, c.day, c.block)
+                ) || rawPossibleTeachers[0];
+
+                if (availableTeacher) {
+                  c.assigned = true;
+                  c.subject = subject;
+                  c.teacher_id = availableTeacher.id;
+                  poolItem.remaining--;
+                  clsScheduled++;
+                }
+              }
+            }
+          });
+
+          trialScheduledOverall += clsScheduled;
+          trialClassResults.push({
+            classId: cls.id,
+            cells,
+            scheduled: clsScheduled,
+            demanded: clsDemanded
+          });
+
+          // Add newly scheduled slots to trialRunningSlots so next classes won't conflict
+          cells.filter(c => c.assigned).forEach(c => {
+            trialRunningSlots.push({
+              id: crypto.randomUUID(),
+              class_id: cls.id,
+              teacher_id: c.teacher_id,
+              subject: c.subject,
+              day_of_week: c.day,
+              start_time: c.block.start_time,
+              end_time: c.block.end_time
+            });
+          });
+        }
+
+        // Score this trial: higher scheduled hours + double lesson bonus
+        const totalDemanded = trialClassResults.reduce((s, r) => s + r.demanded, 0);
+        const score = (trialScheduledOverall * 1000) - ((totalDemanded - trialScheduledOverall) * 2000);
+
+        return {
+          trialScheduledOverall,
+          totalDemanded,
+          score,
+          trialRunningSlots,
+          trialClassResults
+        };
+      };
+
+      // Run 30 optimization trials to find the absolute best schedule distribution!
+      let bestResult = runTrial(0);
+      for (let seed = 1; seed < 30; seed++) {
+        if (bestResult.trialScheduledOverall >= bestResult.totalDemanded) break; // 100% perfect!
+        const trialRes = runTrial(seed);
+        if (trialRes.score > bestResult.score) {
+          bestResult = trialRes;
         }
       }
 
-      // Check detailed matrix grid availability (e.g. "segunda-1", "terca-3", etc.)
-      if (teacher.availability_grid && Object.keys(teacher.availability_grid).length > 0) {
-        const key = `${day}-${slotIndex}`;
-        if (teacher.availability_grid[key] === false) {
-          return false;
-        }
-      }
+      totalDemandedOverall = bestResult.totalDemanded;
+      scheduledWithTeacherOverall = bestResult.trialScheduledOverall;
 
-      return true;
-    };
-
-    // Helper to calculate teacher's total assigned hours (in other classes + currently scheduled in this run)
-    const getTeacherAssignedHours = (teacherId: string) => {
-      const otherClassesHours = otherClassesSlots.filter(s => s.teacher_id === teacherId).length;
-      const currentRunHours = cells.filter(c => c.assigned && c.teacher_id === teacherId).length;
-      return otherClassesHours + currentRunHours;
-    };
-
-    // Sort subjects by difficulty (fewer possible teachers first, then more remaining lessons)
-    const sortPoolByDifficulty = () => {
-      subjectPool.sort((a, b) => {
-        const teachersA = teachersBySubject[a.subject]?.length || 0;
-        const teachersB = teachersBySubject[b.subject]?.length || 0;
-        if (teachersA !== teachersB) {
-          return teachersA - teachersB; // Fewer available teachers first
-        }
-        return b.remaining - a.remaining; // More remaining lessons first
-      });
-    };
-
-    const unassignedSubjectsList: string[] = [];
-    let scheduledWithTeacher = 0;
-    let scheduledWithoutTeacher = 0;
-
-    sortPoolByDifficulty();
-
-    // Place each lesson from our sorted subject pool
-    subjectPool.forEach(poolItem => {
-      const subject = poolItem.subject;
-      const possibleTeachers = teachersBySubject[subject] || [];
-
-      while (poolItem.remaining > 0) {
-        let placed = false;
-
-        // Pass 1: Try to place with daily frequency limit (< 2 lessons/day), workload-compliant, and conflict-free teacher
-        for (let c of cells) {
-          if (c.assigned) continue;
-
-          const dailyCount = cells.filter(cell => cell.assigned && cell.day === c.day && cell.subject === subject).length;
-          if (dailyCount >= 2) continue;
-
-          const availableTeacher = possibleTeachers.find(t => 
-            isTeacherAvailable(t, c.day, c.block) && 
-            !hasTeacherConflict(t.id, c.day, c.block) &&
-            getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
-          );
-
-          if (availableTeacher) {
-            c.assigned = true;
-            c.subject = subject;
-            c.teacher_id = availableTeacher.id;
-            poolItem.remaining--;
-            scheduledWithTeacher++;
-            placed = true;
-            break;
+      bestResult.trialClassResults.forEach(res => {
+        const cls = targetClasses.find(c => c.id === res.classId);
+        if (cls) {
+          if (res.demanded > res.scheduled) {
+            logDetails.push(`• Turma ${cls.name}: Alocadas ${res.scheduled}/${res.demanded} aulas (faltaram ${res.demanded - res.scheduled} aulas).`);
+            logDetails.push(`   ↳ Sugestão: Verifique se todas as matérias da grade curricular possuem professores habilitados cadastrados no sistema e com horários disponíveis.`);
+          } else {
+            logDetails.push(`• Turma ${cls.name}: 100% alocado (${res.scheduled}/${res.demanded} aulas).`);
           }
         }
-
-        if (placed) continue;
-
-        // Pass 2: Relax daily count constraint (allow >= 2 lessons/day if needed), but still require an available, workload-compliant, conflict-free teacher
-        for (let c of cells) {
-          if (c.assigned) continue;
-
-          const availableTeacher = possibleTeachers.find(t => 
-            isTeacherAvailable(t, c.day, c.block) && 
-            !hasTeacherConflict(t.id, c.day, c.block) &&
-            getTeacherAssignedHours(t.id) < (t.workload_hours || 20)
-          );
-
-          if (availableTeacher) {
-            c.assigned = true;
-            c.subject = subject;
-            c.teacher_id = availableTeacher.id;
-            poolItem.remaining--;
-            scheduledWithTeacher++;
-            placed = true;
-            break;
-          }
-        }
-
-        if (placed) continue;
-
-        if (!placed) {
-          // Break to avoid infinite loop since no teacher could take this lesson, and we don't assign it without a teacher
-          console.warn(`Could not find an available teacher for lesson of subject ${subject}`);
-          break;
-        }
-      }
-    });
-
-    // Convert our assigned cells back to ScheduleSlot format
-    const newSlots: ScheduleSlot[] = cells
-      .filter(c => c.assigned)
-      .map(c => ({
-        id: crypto.randomUUID(),
-        class_id: selectedClassId,
-        teacher_id: c.teacher_id,
-        subject: c.subject,
-        day_of_week: c.day,
-        start_time: c.block.start_time,
-        end_time: c.block.end_time
-      }));
-
-    setScheduleSlots([...otherClassesSlots, ...newSlots]);
-
-    const details: string[] = [];
-    details.push(`Total de aulas demandadas pelo currículo: ${totalDemanded}`);
-    details.push(`Aulas com professor designado: ${scheduledWithTeacher}`);
-    
-    if (totalDemanded > scheduledWithTeacher) {
-      details.push(`Aulas não agendadas por falta de professor disponível: ${totalDemanded - scheduledWithTeacher}`);
-      
-      // List missing subjects
-      subjectPool.forEach(poolItem => {
-        if (poolItem.remaining > 0) {
-          details.push(`• Faltou alocar ${poolItem.remaining} aula(s) de ${poolItem.subject}.`);
-        }
       });
-      
+
+      runningSlots = bestResult.trialRunningSlots;
+
+    setScheduleSlots(runningSlots);
+
+    if (scheduledWithTeacherOverall === totalDemandedOverall) {
       setScheduleStatus({
-        message: `Grade organizada parcialmente. Agendadas ${scheduledWithTeacher} de ${totalDemanded} aulas possíveis.`,
-        type: 'warning',
-        details: [
-          ...details,
-          '',
-          'Aviso: Para que a grade horária seja gerada automaticamente, é obrigatório que o professor esteja cadastrado com:',
-          '1. A disciplina selecionada',
-          '2. O segmento (Ex: Ensino Médio)',
-          '3. Os dias disponíveis e o turno correto.'
-        ]
+        message: `Sucesso! Grade horária organizada com 100% de aproveitamento (${scheduledWithTeacherOverall}/${totalDemandedOverall} aulas) para ${targetClasses.length} turma(s).`,
+        type: 'success',
+        details: [`Total de turmas processadas: ${targetClasses.length}`, `Total de aulas agendadas: ${scheduledWithTeacherOverall}`, `Sem conflitos de professores ou horários.`]
       });
     } else {
       setScheduleStatus({
-        message: 'Sucesso! Grade horária gerada e 100% alinhada com professores cadastrados.',
-        type: 'success',
-        details
+        message: `Organização concluída: ${scheduledWithTeacherOverall} de ${totalDemandedOverall} aulas foram agendadas sem conflitos.`,
+        type: 'warning',
+        details: [
+          `Turmas processadas: ${targetClasses.length}`,
+          `Aulas com professor: ${scheduledWithTeacherOverall} de ${totalDemandedOverall}`,
+          ...logDetails
+        ]
       });
     }
   };
 
-  const handleAddTimeBlock = () => {
-    const currentClass = classes.find(c => c.id === selectedClassId);
-    if (!currentClass) return;
-    const currentShift = getClassShift(currentClass);
-    const isAfternoon = currentShift === 'vespertino';
-
-    const defaultStart = isAfternoon ? '13:10' : '07:30';
-    const defaultEnd = isAfternoon ? '14:00' : '08:20';
-
-    const sameShiftClasses = classes.filter(c => getClassShift(c) === currentShift);
-
-    setTimeBlocks(prev => [
-      ...prev,
-      ...sameShiftClasses.map(c => ({
-        id: crypto.randomUUID(),
-        class_id: c.id,
-        start_time: defaultStart,
-        end_time: defaultEnd
-      }))
-    ]);
+  // Helper to add minutes to HH:MM time string
+  const addMinutesToTimeStr = (timeStr: string, minutes: number): string => {
+    if (!timeStr || !timeStr.includes(':')) return '08:00';
+    const [hStr, mStr] = timeStr.split(':');
+    let h = parseInt(hStr, 10);
+    let m = parseInt(mStr, 10);
+    if (isNaN(h) || isNaN(m)) return timeStr;
+    m += minutes;
+    h += Math.floor(m / 60);
+    m = m % 60;
+    h = h % 24;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   };
 
-  const handleAddIntervalBlock = () => {
+  // --- TIME BLOCKS MANAGEMENT (SYNCED ACCROSS ENTIRE SHIFT) ---
+  const handleAddTimeBlock = (isInterval = false) => {
     const currentClass = classes.find(c => c.id === selectedClassId);
     if (!currentClass) return;
     const currentShift = getClassShift(currentClass);
     const isAfternoon = currentShift === 'vespertino';
 
-    const defaultStart = isAfternoon ? '14:50' : '09:00';
-    const defaultEnd = isAfternoon ? '15:10' : '09:20';
+    const currentBlocks = timeBlocks
+      .filter(tb => tb.class_id === selectedClassId)
+      .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
+    let defaultStart = isAfternoon ? '13:10' : '07:20';
+    let defaultEnd = isInterval ? (isAfternoon ? '13:30' : '07:40') : (isAfternoon ? '14:00' : '08:10');
+
+    if (currentBlocks.length > 0) {
+      const lastBlock = currentBlocks[currentBlocks.length - 1];
+      defaultStart = normalizeTimeStr(lastBlock.end_time);
+      defaultEnd = addMinutesToTimeStr(defaultStart, isInterval ? 20 : 50);
+    }
 
     const sameShiftClasses = classes.filter(c => getClassShift(c) === currentShift);
 
-    setTimeBlocks(prev => [
-      ...prev,
-      ...sameShiftClasses.map(c => ({
+    setTimeBlocks(prev => {
+      const newBlocks: TimeBlock[] = sameShiftClasses.map(c => ({
         id: crypto.randomUUID(),
         class_id: c.id,
         start_time: defaultStart,
         end_time: defaultEnd,
-        is_interval: true
-      }))
-    ]);
+        is_interval: isInterval
+      }));
+      return [...prev, ...newBlocks];
+    });
   };
 
   const handleResetDefaultBlocks = () => {
@@ -1805,12 +2103,11 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           newBlocks.push(
             { id: crypto.randomUUID(), class_id: c.id, start_time: '13:10', end_time: '14:00' },
             { id: crypto.randomUUID(), class_id: c.id, start_time: '14:00', end_time: '14:50' },
-            { id: crypto.randomUUID(), class_id: c.id, start_time: '14:50', end_time: '15:10', is_interval: true },
-            { id: crypto.randomUUID(), class_id: c.id, start_time: '15:10', end_time: '16:00' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '14:50', end_time: '15:40' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '15:40', end_time: '16:00', is_interval: true },
             { id: crypto.randomUUID(), class_id: c.id, start_time: '16:00', end_time: '16:50' },
-            { id: crypto.randomUUID(), class_id: c.id, start_time: '16:50', end_time: '17:10', is_interval: true },
-            { id: crypto.randomUUID(), class_id: c.id, start_time: '17:10', end_time: '18:00' },
-            { id: crypto.randomUUID(), class_id: c.id, start_time: '18:00', end_time: '18:50' }
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '16:50', end_time: '17:40' },
+            { id: crypto.randomUUID(), class_id: c.id, start_time: '17:40', end_time: '18:30' }
           );
         } else {
           newBlocks.push(
@@ -1830,74 +2127,88 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     });
   };
 
-  const updateTimeBlock = (id: string, field: 'start_time' | 'end_time', value: string) => {
-    const targetBlock = timeBlocks.find(tb => tb.id === id);
-    if (!targetBlock) return;
+  const updateTimeBlock = (blockId: string, field: 'start_time' | 'end_time', rawValue: string) => {
+    const targetClass = classes.find(c => c.id === selectedClassId);
+    if (!targetClass) return;
+    const currentShift = getClassShift(targetClass);
 
-    const currentClass = classes.find(c => c.id === selectedClassId);
-    if (!currentClass) return;
-
-    const currentShift = getClassShift(currentClass);
-    const sortedCurrent = classTimeBlocks;
-    const blockIndex = sortedCurrent.findIndex(tb => tb.id === id);
-    const oldValue = targetBlock[field];
-
+    const sortedCurrentBlocks = timeBlocks
+      .filter(tb => tb.class_id === selectedClassId)
+      .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+    
+    const blockIndex = sortedCurrentBlocks.findIndex(tb => tb.id === blockId);
     if (blockIndex === -1) return;
+
+    const targetBlock = sortedCurrentBlocks[blockIndex];
+    const oldValue = targetBlock[field];
+    const normalizedValue = normalizeTimeStr(rawValue);
 
     const sameShiftClasses = classes.filter(c => getClassShift(c) === currentShift);
     const sameShiftClassIds = new Set(sameShiftClasses.map(c => c.id));
 
     setTimeBlocks(prev => {
-      return prev.map(tb => {
-        if (sameShiftClassIds.has(tb.class_id)) {
-          const sortedClassBlocks = prev
-            .filter(b => b.class_id === tb.class_id)
-            .sort((a, b) => a.start_time.localeCompare(b.start_time));
+      const next = [...prev];
+      sameShiftClasses.forEach(c => {
+        const classBlocks = next
+          .filter(tb => tb.class_id === c.id)
+          .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+        
+        let targetForC = classBlocks.find(tb => tb.start_time === targetBlock.start_time && tb.end_time === targetBlock.end_time);
+        if (!targetForC && classBlocks[blockIndex]) {
+          targetForC = classBlocks[blockIndex];
+        }
 
-          if (sortedClassBlocks[blockIndex]?.id === tb.id) {
-            return { ...tb, [field]: value };
+        if (targetForC) {
+          const idxInPrev = next.findIndex(tb => tb.id === targetForC!.id);
+          if (idxInPrev !== -1) {
+            next[idxInPrev] = { ...next[idxInPrev], [field]: normalizedValue };
           }
         }
-        return tb;
       });
+      return next;
     });
 
     setScheduleSlots(slots => slots.map(s => {
       if (sameShiftClassIds.has(s.class_id) && s[field] === oldValue) {
-        return { ...s, [field]: value };
+        return { ...s, [field]: normalizedValue };
       }
       return s;
     }));
   };
 
-  const removeTimeBlock = (id: string) => {
-    const block = timeBlocks.find(tb => tb.id === id);
-    if (!block) return;
+  const removeTimeBlock = (blockId: string) => {
+    const targetClass = classes.find(c => c.id === selectedClassId);
+    if (!targetClass) return;
+    const currentShift = getClassShift(targetClass);
 
-    const currentClass = classes.find(c => c.id === selectedClassId);
-    if (!currentClass) return;
+    const sortedCurrentBlocks = timeBlocks
+      .filter(tb => tb.class_id === selectedClassId)
+      .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+    
+    const blockIndex = sortedCurrentBlocks.findIndex(tb => tb.id === blockId);
+    if (blockIndex === -1) return;
 
-    const currentShift = getClassShift(currentClass);
-    const blockIndex = classTimeBlocks.findIndex(tb => tb.id === id);
+    const targetBlock = sortedCurrentBlocks[blockIndex];
 
     const sameShiftClasses = classes.filter(c => getClassShift(c) === currentShift);
     const sameShiftClassIds = new Set(sameShiftClasses.map(c => c.id));
 
     const idsToRemove = new Set<string>();
-    timeBlocks.forEach(tb => {
-      if (sameShiftClassIds.has(tb.class_id)) {
-        const sorted = timeBlocks
-          .filter(b => b.class_id === tb.class_id)
-          .sort((a, b) => a.start_time.localeCompare(b.start_time));
-        if (sorted[blockIndex]?.id === tb.id) {
-          idsToRemove.add(tb.id);
-        }
+
+    sameShiftClasses.forEach(c => {
+      const classBlocks = timeBlocks
+        .filter(tb => tb.class_id === c.id)
+        .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+      
+      const matched = classBlocks.find(tb => tb.start_time === targetBlock.start_time && tb.end_time === targetBlock.end_time) || classBlocks[blockIndex];
+      if (matched) {
+        idsToRemove.add(matched.id);
       }
     });
 
     setScheduleSlots(slots => slots.filter(s => {
       if (sameShiftClassIds.has(s.class_id)) {
-        return !(s.start_time === block.start_time && s.end_time === block.end_time);
+        return !(s.start_time === targetBlock.start_time && s.end_time === targetBlock.end_time);
       }
       return true;
     }));
@@ -1936,7 +2247,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       if (teacher.available_slots && teacher.available_slots.length > 0 && teacher.available_slots.length < 6) {
         const nonIntervalBlocks = classTimeBlocks
           .filter(b => !b.is_interval)
-          .sort((a, b) => a.start_time.localeCompare(b.start_time));
+          .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
         const slotIndex = nonIntervalBlocks.findIndex(b => b.id === block.id) + 1;
         if (slotIndex > 0 && !teacher.available_slots.includes(slotIndex)) {
           if (!confirm(`Atenção: O professor ${teacher.name} não tem disponibilidade cadastrada no ${slotIndex}º horário. Deseja adicionar mesmo assim?`)) {
@@ -1963,7 +2274,21 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         }
       }
 
-      // Check conflict (the same teacher cannot be scheduled twice at the same/overlapping time slot in any class, or the same class)
+      // Check max 2 lessons of the same subject per day limit
+      const sameSubjectCountOnDay = scheduleSlots.filter(s => 
+        s.class_id === selectedClassId && 
+        s.day_of_week === day && 
+        s.subject === cellSubject && 
+        !(s.start_time === block.start_time && s.end_time === block.end_time)
+      ).length;
+
+      if (sameSubjectCountOnDay >= 2) {
+        if (!confirm(`Atenção: A turma já possui ${sameSubjectCountOnDay} aulas de "${cellSubject}" na ${day}. O limite é de no máximo 2 aulas da mesma matéria no mesmo dia. Deseja adicionar mesmo assim?`)) {
+          return;
+        }
+      }
+
+      // Check conflict (the same teacher cannot be scheduled twice at the same/overlapping time slot in any class)
       const conflict = scheduleSlots.find(s => 
         s.teacher_id === cellTeacherId && 
         s.day_of_week === day &&
@@ -2014,7 +2339,9 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     ensino_medio: 'Ensino Médio'
   };
 
-  const exportPDF = () => {
+  // --- PDF EXPORT FUNCTIONS ---
+  const exportPDFCurrentClass = () => {
+    setIsExportModalOpen(false);
     if (!selectedClassId) return;
     const selectedClass = classes.find(c => c.id === selectedClassId);
     if (!selectedClass) return;
@@ -2022,12 +2349,20 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
     const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(16);
-    doc.text(`Grade Horária - ${selectedClass.name} (${groupLabels[selectedClass.group]})`, 14, 15);
+    doc.text(`Grade Horária - ${selectedClass.name} (${groupLabels[selectedClass.group] || selectedClass.group})`, 14, 15);
 
     const daysOfWeek: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
     const headers = ['Horários', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta'];
 
+    const isClass678 = is678Grade(selectedClass.name);
+    const nonIntervalBlocks = classTimeBlocks
+      .filter(b => !b.is_interval)
+      .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
     const body = classTimeBlocks.map(block => {
+      const nonIntervalIdx = nonIntervalBlocks.findIndex(b => b.id === block.id);
+      const is6thSlot = nonIntervalIdx >= 5;
+
       const row = [`${block.start_time} - ${block.end_time}`];
       if (block.is_interval) {
         daysOfWeek.forEach(() => {
@@ -2035,8 +2370,13 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         });
       } else {
         daysOfWeek.forEach(day => {
+          const isRestrictedDay = day === 'segunda' || day === 'quarta' || day === 'sexta';
           const slot = scheduleSlots.find(s => s.class_id === selectedClassId && s.day_of_week === day && s.start_time === block.start_time && s.end_time === block.end_time);
-          row.push(slot ? `${slot.subject}\n(${teachers.find(t => t.id === slot.teacher_id)?.name || 'S/ Prof'})` : '---------');
+          if (isClass678 && isRestrictedDay && is6thSlot && !slot) {
+            row.push('Sem 6º Horário\n(Apenas Ter/Qui)');
+          } else {
+            row.push(slot ? `${slot.subject}\n(${teachers.find(t => t.id === slot.teacher_id)?.name || 'S/ Prof'})` : '---------');
+          }
         });
       }
       return row;
@@ -2057,6 +2397,138 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
 
     doc.save(`grade_horaria_${selectedClass.name.toLowerCase().replace(/\s+/g, '_')}.pdf`);
   };
+
+  const exportAllClassesPDF = (targetClassesList: SchoolClass[], titleSuffix: string) => {
+    setIsExportModalOpen(false);
+    if (targetClassesList.length === 0) return;
+
+    const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+    const daysOfWeek: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+    const headers = ['Horários', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta'];
+
+    targetClassesList.forEach((cls, index) => {
+      if (index > 0) {
+        doc.addPage();
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.text(`Grade Horária - ${cls.name} (${groupLabels[cls.group] || cls.group})`, 14, 15);
+
+      const cBlocks = timeBlocks
+        .filter(tb => tb.class_id === cls.id)
+        .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
+      const isClass678 = is678Grade(cls.name);
+      const nonIntervalBlocks = cBlocks
+        .filter(b => !b.is_interval)
+        .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
+      const body = cBlocks.map(block => {
+        const nonIntervalIdx = nonIntervalBlocks.findIndex(b => b.id === block.id);
+        const is6thSlot = nonIntervalIdx >= 5;
+
+        const row = [`${block.start_time} - ${block.end_time}`];
+        if (block.is_interval) {
+          daysOfWeek.forEach(() => {
+            row.push('☕ INTERVALO');
+          });
+        } else {
+          daysOfWeek.forEach(day => {
+            const isRestrictedDay = day === 'segunda' || day === 'quarta' || day === 'sexta';
+            const slot = scheduleSlots.find(s => s.class_id === cls.id && s.day_of_week === day && s.start_time === block.start_time && s.end_time === block.end_time);
+            if (isClass678 && isRestrictedDay && is6thSlot && !slot) {
+              row.push('Sem 6º Horário\n(Apenas Ter/Qui)');
+            } else {
+              row.push(slot ? `${slot.subject}\n(${teachers.find(t => t.id === slot.teacher_id)?.name || 'S/ Prof'})` : '---------');
+            }
+          });
+        }
+        return row;
+      });
+
+      autoTable(doc, {
+        startY: 22,
+        head: [headers],
+        body: body,
+        theme: 'grid',
+        headStyles: { fillColor: [211, 47, 47], textColor: [255, 255, 255] },
+        styles: { fontSize: 9, halign: 'center', valign: 'middle' },
+        columnStyles: {
+          0: { fontStyle: 'bold', halign: 'center', cellWidth: 35 }
+        },
+        margin: { left: 14, right: 14 }
+      });
+    });
+
+    doc.save(`grade_horaria_${titleSuffix.toLowerCase().replace(/\s+/g, '_')}.pdf`);
+  };
+
+  const exportTeacherSchedulesPDF = () => {
+    setIsExportModalOpen(false);
+    if (teachers.length === 0) {
+      alert('Nenhum professor cadastrado para exportar.');
+      return;
+    }
+
+    const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+    const daysOfWeek: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+    const headers = ['Horários', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta'];
+
+    const uniqueTimes = Array.from(new Set(timeBlocks.map(b => `${b.start_time} - ${b.end_time}`)))
+      .sort((a, b) => timeToMinutes(a.split(' - ')[0]) - timeToMinutes(b.split(' - ')[0]));
+
+    teachers.forEach((teacher, index) => {
+      if (index > 0) {
+        doc.addPage();
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.text(`Grade de Aulas - Prof. ${teacher.name}`, 14, 15);
+
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      const teacherSubjects = teacher.subjects.join(', ');
+      doc.text(`Disciplinas: ${teacherSubjects || 'N/A'} | Carga Horária: ${teacher.workload_hours || 20}h | Turno: ${teacher.availability_shift || 'ambos'}`, 14, 21);
+
+      const teacherSlots = scheduleSlots.filter(s => s.teacher_id === teacher.id);
+
+      const body = uniqueTimes.map(timeRange => {
+        const [startTime, endTime] = timeRange.split(' - ');
+        const row = [timeRange];
+
+        daysOfWeek.forEach(day => {
+          const slot = teacherSlots.find(s => s.day_of_week === day && s.start_time === startTime && s.end_time === endTime);
+          if (slot) {
+            const cls = classes.find(c => c.id === slot.class_id);
+            row.push(`${slot.subject}\n(${cls ? cls.name : 'Turma'})`);
+          } else {
+            row.push('---------');
+          }
+        });
+        return row;
+      });
+
+      autoTable(doc, {
+        startY: 27,
+        head: [headers],
+        body: body,
+        theme: 'grid',
+        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] },
+        styles: { fontSize: 9, halign: 'center', valign: 'middle' },
+        columnStyles: {
+          0: { fontStyle: 'bold', halign: 'center', cellWidth: 35 }
+        },
+        margin: { left: 14, right: 14 }
+      });
+    });
+
+    doc.save(`grade_horaria_professores.pdf`);
+  };
+
+  const currentSelectedClass = classes.find(c => c.id === selectedClassId);
+  const currentShiftName = currentSelectedClass ? getClassShift(currentSelectedClass) : 'matutino';
 
   return (
     <div className="space-y-6">
@@ -2083,7 +2555,137 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         </div>
       )}
 
-      <div className="flex justify-between items-center">
+      {/* AUTO ORGANIZER MODAL / OPTIONS */}
+      {isAutoModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4 animate-in fade-in zoom-in duration-150">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <Wand2 className="w-5 h-5 text-red-600" />
+                <h3 className="font-bold text-slate-800 text-base">Organizar Grade Automática</h3>
+              </div>
+              <button onClick={() => setIsAutoModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Escolha qual escopo de turmas deseja organizar automaticamente com base nas disciplinas e professores cadastrados:
+            </p>
+
+            <div className="space-y-2">
+              {selectedClassId && (
+                <button
+                  onClick={() => runAutoOrganize('selected')}
+                  className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-red-500 hover:bg-red-50/50 transition-all group"
+                >
+                  <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">⚡ Organizar Apenas {currentSelectedClass?.name}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Aloca aulas apenas para a turma atualmente selecionada.</p>
+                </button>
+              )}
+
+              <button
+                onClick={() => runAutoOrganize('shift')}
+                className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-red-500 hover:bg-red-50/50 transition-all group"
+              >
+                <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">
+                  ⚡ Organizar TODAS as Turmas do Turno ({currentShiftName.toUpperCase()})
+                </p>
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  Organiza todas as turmas do turno {currentShiftName} simultaneamente sem conflitos de professores.
+                </p>
+              </button>
+
+              <button
+                onClick={() => runAutoOrganize('all')}
+                className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-red-500 hover:bg-red-50/50 transition-all group"
+              >
+                <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">⚡ Organizar TODAS as Turmas da Escola (Geral)</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">Mapeia e aloca todas as turmas de todos os turnos e segmentos.</p>
+              </button>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setIsAutoModalOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EXPORT OPTIONS MODAL */}
+      {isExportModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4 animate-in fade-in zoom-in duration-150">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <Download className="w-5 h-5 text-slate-800" />
+                <h3 className="font-bold text-slate-800 text-base">Exportar Grade Horária (PDF)</h3>
+              </div>
+              <button onClick={() => setIsExportModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Selecione o formato de relatório que deseja exportar:
+            </p>
+
+            <div className="space-y-2">
+              {selectedClassId && (
+                <button
+                  onClick={exportPDFCurrentClass}
+                  className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-slate-800 hover:bg-slate-50 transition-all group"
+                >
+                  <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">📄 Exportar Turma Atual ({currentSelectedClass?.name})</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Gera o arquivo PDF individual da turma selecionada.</p>
+                </button>
+              )}
+
+              <button
+                onClick={() => exportAllClassesPDF(classes.filter(c => getClassShift(c) === currentShiftName), `Turno_${currentShiftName}`)}
+                className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-slate-800 hover:bg-slate-50 transition-all group"
+              >
+                <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">
+                  📚 Exportar TODAS as Turmas do Turno ({currentShiftName.toUpperCase()})
+                </p>
+                <p className="text-[10px] text-slate-500 mt-0.5">Consolida as turmas do turno {currentShiftName} em um único documento PDF.</p>
+              </button>
+
+              <button
+                onClick={() => exportAllClassesPDF(classes, 'Geral_Escola')}
+                className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-slate-800 hover:bg-slate-50 transition-all group"
+              >
+                <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">🏫 Exportar TODAS as Turmas da Escola</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">Gera relatório completo com todas as turmas de todos os segmentos.</p>
+              </button>
+
+              <button
+                onClick={exportTeacherSchedulesPDF}
+                className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-slate-800 hover:bg-slate-50 transition-all group"
+              >
+                <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">👨‍🏫 Exportar Grade por Professor (Individual)</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">Gera arquivo PDF com a agenda semanal detalhada de cada docente.</p>
+              </button>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setIsExportModalOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
         <select
           className="px-4 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 font-bold text-slate-700 min-w-[250px]"
           value={selectedClassId}
@@ -2106,9 +2708,8 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         <div className="flex items-center space-x-2">
           {isAdmin && (
             <button 
-              onClick={autoOrganizeSchedule} 
-              disabled={!selectedClassId}
-              className="flex items-center space-x-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => setIsAutoModalOpen(true)} 
+              className="flex items-center space-x-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold transition-colors"
             >
               <Wand2 className="w-4 h-4" />
               <span>Organizar Automaticamente</span>
@@ -2116,9 +2717,8 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           )}
 
           <button 
-            onClick={exportPDF} 
-            disabled={!selectedClassId}
-            className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => setIsExportModalOpen(true)} 
+            className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg font-bold transition-colors"
           >
             <Download className="w-4 h-4" />
             <span>Exportar PDF</span>
@@ -2175,6 +2775,13 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                           const selectedClass = classes.find(c => c.id === selectedClassId);
                           const availableTeachers = teachers.filter(t => selectedClass && t.groups?.includes(selectedClass.group));
 
+                          const isClass678 = selectedClass ? is678Grade(selectedClass.name) : false;
+                          const nonIntervalBlocks = classTimeBlocks.filter(b => !b.is_interval).sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+                          const nonIntervalIdx = nonIntervalBlocks.findIndex(b => b.id === block.id);
+                          const is6thSlot = nonIntervalIdx >= 5;
+                          const isRestrictedDay = day === 'segunda' || day === 'quarta' || day === 'sexta';
+                          const isRestricted6thSlot = isClass678 && isRestrictedDay && is6thSlot && !existingSlot;
+
                           return (
                             <td key={day} className={`border-r border-slate-200 last:border-r-0 p-2 align-top relative ${isAdmin ? 'hover:bg-slate-50 cursor-pointer' : ''}`} onClick={() => !isEditing && openCellEdit(block, day, existingSlot)}>
                               {isEditing ? (
@@ -2209,6 +2816,11 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                                   <span className="font-bold text-xs text-slate-800 text-center">{existingSlot.subject}</span>
                                   <span className="text-[10px] text-slate-500 text-center">{teachers.find(t => t.id === existingSlot.teacher_id)?.name}</span>
                                 </div>
+                              ) : isRestricted6thSlot ? (
+                                <div className="flex flex-col items-center justify-center h-full min-h-[60px] p-2 bg-slate-100/60 rounded-lg border border-dashed border-slate-200">
+                                  <span className="text-[11px] font-medium text-slate-400 text-center">Sem 6º Horário</span>
+                                  <span className="text-[9px] text-slate-400 text-center">(Apenas Ter/Qui)</span>
+                                </div>
                               ) : (
                                 <div className="flex items-center justify-center h-full min-h-[60px]">
                                   <span className="text-xs text-slate-300 italic">Livre</span>
@@ -2235,14 +2847,14 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
           {isAdmin && (
             <div className="flex flex-wrap gap-3 pt-2">
               <button 
-                onClick={handleAddTimeBlock}
+                onClick={() => handleAddTimeBlock(false)}
                 className="flex items-center space-x-2 text-red-600 hover:text-red-700 font-bold text-xs bg-red-50 hover:bg-red-100 px-3.5 py-2 rounded-xl transition-colors border border-red-100"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Adicionar Horário Aula</span>
               </button>
               <button 
-                onClick={handleAddIntervalBlock}
+                onClick={() => handleAddTimeBlock(true)}
                 className="flex items-center space-x-2 text-amber-700 hover:text-amber-800 font-bold text-xs bg-amber-50 hover:bg-amber-100 px-3.5 py-2 rounded-xl transition-colors border border-amber-100"
               >
                 <Plus className="w-3.5 h-3.5" />
