@@ -223,6 +223,7 @@ export const EditorHorarios: React.FC<EditorHorariosProps> = ({ currentUser }) =
           <ScheduleManager
             teachers={teachers}
             classes={classes}
+            subjects={subjects}
             scheduleSlots={scheduleSlots}
             setScheduleSlots={setScheduleSlots}
             timeBlocks={timeBlocks}
@@ -1447,9 +1448,10 @@ const normalizeTimeStr = (timeStr: string): string => {
 };
 
 // --- Schedule Manager ---
-function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, timeBlocks, setTimeBlocks, isAdmin }: { 
+function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setScheduleSlots, timeBlocks, setTimeBlocks, isAdmin }: { 
   teachers: Teacher[], 
   classes: SchoolClass[], 
+  subjects: Subject[],
   scheduleSlots: ScheduleSlot[], 
   setScheduleSlots: React.Dispatch<React.SetStateAction<ScheduleSlot[]>>,
   timeBlocks: TimeBlock[],
@@ -1863,6 +1865,11 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
         size: number;
       }
 
+      const getDisplaySubjectName = (subName: string): string => {
+        const found = subjects.find(s => s.name.toUpperCase().trim() === subName.toUpperCase().trim());
+        return found ? found.name : subName;
+      };
+
       let trialMeetings: TrialMeeting[] = [];
       targetClasses.forEach(cls => {
         let workloads = cls.subject_workloads;
@@ -1872,14 +1879,21 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
                       cls.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
         }
 
+        // Merge case-insensitive workloads to avoid duplicate entries for the same subject
+        const normalizedWorkloads: { [subject: string]: number } = {};
         Object.entries(workloads).forEach(([subject, hours]) => {
-          if (hours <= 0) return;
+          if (!subject || hours <= 0) return;
+          const key = subject.trim().toUpperCase();
+          normalizedWorkloads[key] = (normalizedWorkloads[key] || 0) + hours;
+        });
+
+        Object.entries(normalizedWorkloads).forEach(([subject, hours]) => {
           let remaining = hours;
           while (remaining >= 2) {
             trialMeetings.push({
               id: crypto.randomUUID(),
               classId: cls.id,
-              subject,
+              subject, // upper-cased key for reliable optimization
               size: 2
             });
             remaining -= 2;
@@ -1928,7 +1942,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
       const getFlexibility = (m: TrialMeeting) => {
         const cls = targetClasses.find(c => c.id === m.classId)!;
         const qTeachers = teachers.filter(t =>
-          t.subjects.includes(m.subject) &&
+          t.subjects.some(sub => sub.toUpperCase().trim() === m.subject.toUpperCase().trim()) &&
           t.groups.includes(cls.group) &&
           (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(cls.id))
         );
@@ -1969,7 +1983,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
 
         const isTargetSpecialClass = is678Grade(cls.name);
         const qTeachers = teachers.filter(t =>
-          t.subjects.includes(m.subject) &&
+          t.subjects.some(sub => sub.toUpperCase().trim() === m.subject.toUpperCase().trim()) &&
           t.groups.includes(cls.group) &&
           (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(cls.id))
         );
@@ -1988,7 +2002,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
             const dayLessonsCount = trialRunningSlots.filter(s =>
               s.class_id === cls.id &&
               s.day_of_week === day &&
-              s.subject === m.subject
+              s.subject.toUpperCase().trim() === m.subject.toUpperCase().trim()
             ).length;
 
             const maxIndex = m.size === 2 ? clsBlocks.length - 2 : clsBlocks.length - 1;
@@ -2115,7 +2129,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
             id: crypto.randomUUID(),
             class_id: cls.id,
             teacher_id: best.teacher.id,
-            subject: m.subject,
+            subject: getDisplaySubjectName(m.subject),
             day_of_week: best.day,
             start_time: b1.start_time,
             end_time: b1.end_time
@@ -2127,7 +2141,7 @@ function ScheduleManager({ teachers, classes, scheduleSlots, setScheduleSlots, t
               id: crypto.randomUUID(),
               class_id: cls.id,
               teacher_id: best.teacher.id,
-              subject: m.subject,
+              subject: getDisplaySubjectName(m.subject),
               day_of_week: best.day,
               start_time: b2.start_time,
               end_time: b2.end_time
