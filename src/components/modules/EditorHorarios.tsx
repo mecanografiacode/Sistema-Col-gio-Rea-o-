@@ -30,6 +30,24 @@ const getClassShift = (c: SchoolClass): 'matutino' | 'vespertino' | 'ambos' => {
   return 'ambos';
 };
 
+const extractBaseGrade = (className: string): string => {
+  if (!className) return '';
+  const normalized = className.trim().toUpperCase()
+    .replace(/°/g, 'º')
+    .replace(/SERIE/g, 'SÉRIE');
+
+  // Match pattern like "6º ANO", "7º ANO", "8º ANO", "9º ANO", "1ª SÉRIE", "2ª SÉRIE", "3ª SÉRIE"
+  const matchGrade = normalized.match(/(\d+[\sºª]*(?:ANO|SÉRIE))/i);
+  if (matchGrade) {
+    return matchGrade[1].replace(/\s+/g, ' ');
+  }
+
+  // Fallback: strip ending letter/shift suffix like " A", " B", " - MATUTINO", " - VESPERTINO"
+  return normalized
+    .replace(/[\s\-_]+(MATUTINO|VESPERTINO|AMBOS|[A-Z])$/i, '')
+    .trim();
+};
+
 const DEFAULT_INFANTIL_WORKLOAD = {};
 
 const DEFAULT_INICIAIS_WORKLOAD = {};
@@ -945,14 +963,23 @@ function ClassManager({ classes, setClasses, subjects }: { classes: SchoolClass[
   const [newClassShift, setNewClassShift] = useState<'matutino' | 'vespertino' | 'ambos'>('ambos');
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
   const [editingWorkloads, setEditingWorkloads] = useState<{ [subject: string]: number }>({});
+  const [syncSameGrade, setSyncSameGrade] = useState(true);
   const [newSubjectName, setNewSubjectName] = useState('');
   const [newSubjectHours, setNewSubjectHours] = useState<number>(2);
 
   const addClass = () => {
     if (!newClassName.trim()) return;
-    const defaultWorkload = newClassGroup === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
+
+    const baseGrade = extractBaseGrade(newClassName);
+    const existingSameGradeClass = classes.find(c => extractBaseGrade(c.name) === baseGrade && c.subject_workloads && Object.keys(c.subject_workloads).length > 0);
+
+    let defaultWorkload = newClassGroup === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
                             newClassGroup === 'anos_iniciais' ? DEFAULT_INICIAIS_WORKLOAD :
                             newClassGroup === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
+
+    if (existingSameGradeClass) {
+      defaultWorkload = { ...existingSameGradeClass.subject_workloads };
+    }
     
     setClasses([
       ...classes,
@@ -1028,13 +1055,29 @@ function ClassManager({ classes, setClasses, subjects }: { classes: SchoolClass[
 
   const saveWorkloads = () => {
     if (!editingClassId) return;
+    const currentClass = classes.find(c => c.id === editingClassId);
+    if (!currentClass) return;
+
+    const baseGrade = extractBaseGrade(currentClass.name);
+
     setClasses(prev => prev.map(c => {
       if (c.id === editingClassId) {
         return {
           ...c,
-          subject_workloads: editingWorkloads
+          subject_workloads: { ...editingWorkloads }
         };
       }
+
+      if (syncSameGrade && baseGrade) {
+        const otherBase = extractBaseGrade(c.name);
+        if (otherBase === baseGrade) {
+          return {
+            ...c,
+            subject_workloads: { ...editingWorkloads }
+          };
+        }
+      }
+
       return c;
     }));
     setEditingClassId(null);
@@ -1264,6 +1307,26 @@ function ClassManager({ classes, setClasses, subjects }: { classes: SchoolClass[
                 </button>
               </div>
             </div>
+
+            {/* Sync option banner for same grade */}
+            {selectedClassForEdit && (
+              <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-xs space-y-1">
+                <label className="flex items-start space-x-2 font-bold text-amber-900 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={syncSameGrade} 
+                    onChange={(e) => setSyncSameGrade(e.target.checked)}
+                    className="mt-0.5 rounded border-amber-300 text-red-600 focus:ring-red-500 w-4 h-4 shrink-0"
+                  />
+                  <span>Sincronizar disciplinas para todo o {extractBaseGrade(selectedClassForEdit.name) || 'ano/série'}</span>
+                </label>
+                {syncSameGrade && (
+                  <p className="text-[10px] text-amber-800 leading-tight pl-6">
+                    Aplica automaticamente para todas as turmas do mesmo ano (ex: {extractBaseGrade(selectedClassForEdit.name)} A e B, Manhã e Tarde).
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="flex space-x-2 pt-2 border-t border-slate-100">
               <button 
