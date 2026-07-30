@@ -2328,35 +2328,41 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 if (hasTeacherConflict2) continue;
               }
 
-              // Satisfies physical hard constraints. Now compute penalties.
-              let penalty = 0;
-
-              // 1. Teacher available days
-              if (!t.available_days?.includes(day)) {
-                penalty += 1000;
+              // Regra 4: As turmas não podem ter mais que 3 aulas da mesma matéria no mesmo dia
+              if (dayLessonsCount + m.size > 3) {
+                continue; // Proibido estritamente ultrapassar 3 aulas da mesma matéria por turma no dia
               }
 
-              // 2. Teacher shift
+              // Satisfies physical hard constraints. Now compute penalties according to exact rules.
+              let penalty = 0;
+
+              // REGRA 1: Disponibilidade do Professor
+              // 1.1 Dias disponíveis
+              if (!t.available_days?.includes(day)) {
+                penalty += 5000;
+              }
+
+              // 1.2 Turno do professor (matutino / vespertino)
               const startHour = parseInt(normalizeTime(b1.start_time).split(':')[0]);
               const isMorning = startHour < 13;
               if (t.availability_shift === 'matutino' && !isMorning) {
-                penalty += 2000;
+                penalty += 5000;
               }
               if (t.availability_shift === 'vespertino' && isMorning) {
-                penalty += 2000;
+                penalty += 5000;
               }
 
-              // 3. Teacher available slots & grid
+              // 1.3 Grade / Horários específicos do professor
               const slotIndex1 = i + 1;
               if (t.available_slots && t.available_slots.length > 0 && t.available_slots.length < 6) {
                 if (!t.available_slots.includes(slotIndex1)) {
-                  penalty += 300;
+                  penalty += 2000;
                 }
               }
               if (t.availability_grid && Object.keys(t.availability_grid).length > 0) {
                 const key1 = `${day}-${slotIndex1}`;
                 if (t.availability_grid[key1] === false) {
-                  penalty += 500;
+                  penalty += 3000;
                 }
               }
 
@@ -2364,29 +2370,70 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 const slotIndex2 = i + 2;
                 if (t.available_slots && t.available_slots.length > 0 && t.available_slots.length < 6) {
                   if (!t.available_slots.includes(slotIndex2)) {
-                    penalty += 300;
+                    penalty += 2000;
                   }
                 }
                 if (t.availability_grid && Object.keys(t.availability_grid).length > 0) {
                   const key2 = `${day}-${slotIndex2}`;
                   if (t.availability_grid[key2] === false) {
-                    penalty += 500;
+                    penalty += 3000;
                   }
                 }
               }
 
-              // 4. Teacher workload limit
-              const currentHours = getTeacherAssignedHours(t.id);
-              if (currentHours + m.size > (t.workload_hours || 20)) {
-                penalty += 1500;
+              // REGRA 2: O professor que tem poucas aulas (ex: 1 a 6 no total) deve dar aulas no mesmo dia para todos os segmentos
+              const teacherAssignedHours = trialRunningSlots.filter(s => s.teacher_id === t.id).length;
+              const isLowWorkload = (t.workload_hours || 20) <= 6;
+              const teacherScheduledDays = Array.from(new Set(trialRunningSlots.filter(s => s.teacher_id === t.id).map(s => s.day_of_week)));
+
+              if (isLowWorkload && teacherScheduledDays.length > 0) {
+                if (teacherScheduledDays.includes(day)) {
+                  // Excelente: Concentra as poucas aulas no mesmo dia que o professor já irá trabalhar
+                  penalty -= 400;
+                } else {
+                  // Penaliza fortemente criar um novo dia de trabalho para um professor de pouca carga
+                  penalty += 2500;
+                }
               }
 
-              // 5. Subject lessons count on the same day
-              if (dayLessonsCount + m.size > 2) {
-                penalty += 400;
+              // REGRA 3: O professor/matéria não pode ficar distante entre as aulas (máximo 1 horário sem dar aula)
+              const existingClassSubjectSlots = trialRunningSlots.filter(s =>
+                s.class_id === cls.id &&
+                s.day_of_week === day &&
+                s.subject.toUpperCase().trim() === m.subject.toUpperCase().trim()
+              );
+
+              if (existingClassSubjectSlots.length > 0) {
+                const existingIndices = existingClassSubjectSlots.map(s => {
+                  return clsBlocks.findIndex(b => timesOverlap(b.start_time, b.end_time, s.start_time, s.end_time));
+                }).filter(idx => idx >= 0);
+
+                if (existingIndices.length > 0) {
+                  const minDist = Math.min(...existingIndices.map(eIdx => Math.abs(eIdx - i)));
+                  if (minDist === 1) {
+                    // Aulas geminadas/consecutivas: Excelente!
+                    penalty -= 150;
+                  } else if (minDist === 2) {
+                    // No máximo 1 horário de intervalo entre as aulas (ex: 1º e 3º horário) -> Tolerável
+                    penalty += 50;
+                  } else if (minDist > 2) {
+                    // Distante (mais de 1 horário vago entre as aulas da mesma matéria) -> Incorreto/Penalizado
+                    penalty += 3500;
+                  }
+                }
               }
 
-              const workloadRatio = currentHours / (t.workload_hours || 20);
+              // Carga do professor limite
+              if (teacherAssignedHours + m.size > (t.workload_hours || 20)) {
+                penalty += 2000;
+              }
+
+              // Se já houver 2 aulas da matéria no dia e for adicionar a 3ª (permitido, mas leve preferência por 2)
+              if (dayLessonsCount + m.size === 3) {
+                penalty += 100;
+              }
+
+              const workloadRatio = teacherAssignedHours / (t.workload_hours || 20);
               const randomFactor = Math.random() * 0.1;
 
               // Total score is dominated by penalty, with workloadRatio and randomFactor as tie-breakers
@@ -3158,6 +3205,18 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
             <p className="text-xs text-slate-500">
               Escolha qual escopo de turmas deseja organizar automaticamente com base nas disciplinas e professores cadastrados:
             </p>
+
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
+              <p className="font-bold text-slate-800 text-xs flex items-center gap-1">
+                <span>🎯</span> Regras de Alocação Inteligente:
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-600 font-medium">
+                <li><strong className="text-slate-700">1º Disponibilidade:</strong> Respeita rigorosamente dias de trabalho, turnos e grade de cada professor.</li>
+                <li><strong className="text-slate-700">2º Concentração de Carga:</strong> Professores com poucas aulas lecionam para todos os seus segmentos no mesmo dia.</li>
+                <li><strong className="text-slate-700">3º Proximidade de Aulas:</strong> Evita grandes janelas na mesma matéria (no máximo 1 horário de intervalo).</li>
+                <li><strong className="text-slate-700">4º Limite por Turma:</strong> Máximo de 3 aulas da mesma disciplina por dia em uma turma.</li>
+              </ul>
+            </div>
 
             <div className="space-y-2">
               {selectedClassId && (
