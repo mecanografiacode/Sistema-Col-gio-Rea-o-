@@ -198,9 +198,11 @@ Sua missão é organizar a grade horária AUTOMATICAMENTE utilizando o modelo Ge
 
 EXIGÊNCIAS RÍGIDAS DA DIREÇÃO DA ESCOLA (ZERO TOLERÂNCIA A ERROS):
 1. REGRAS DE PREENCHIMENTO COMPLETO DA GRADE (SEM AULAS VAGAS ACIDENTAIS):
-   - Turmas dos 6ºs, 7ºs e 8ºs Anos: Possuem REGRA OFICIAL DE HORÁRIO REDUZIDO de 5 aulas na Segunda, Quarta e Sexta (o 6º horário NÂO DEVE TER AULA) e 6 aulas na Terça e Quinta (total 27 aulas). Preencha 100% dos horários válidos dessas turmas!
-   - Turmas dos 9ºs Anos e Ensino Médio: Possuem 6 aulas TODOS os dias da semana (Segunda a Sexta, total 30 aulas). Preencha 100% das 30 aulas!
-2. RIGOR NA CARGA HORÁRIA: Respeite a carga horária estipulada para cada disciplina na turma (subject_workloads).
+   - Turmas dos 6ºs, 7ºs e 8ºs Anos: Possuem REGRA OFICIAL DE HORÁRIO REDUZIDO de 5 aulas na Segunda, Quarta e Sexta (o 6º horário NÃO DEVE TER AULA) e 6 aulas na Terça e Quinta (total 27 aulas). Preencha 100% dos horários válidos dessas turmas sem deixar aulas vagas!
+   - Turmas dos 9ºs Anos e Ensino Médio: Possuem 6 aulas TODOS os dias da semana (Segunda a Sexta, total 30 aulas). Preencha 100% das 30 aulas sem deixar aulas vagas!
+2. RIGOR EXTREMO NA CARGA HORÁRIA (subject_workloads):
+   - Cada turma possui o mapa de cargas horárias (subject_workloads) de cada disciplina (ex: Espanhol = 1 aula/semana, Matemática = 5 aulas/semana).
+   - É ABSOLUTAMENTE PROIBIDO ULTRAPASSAR A CARGA HORÁRIA DEFINIDA! Se Espanhol é 1 aula por semana, aloque EXATAMENTE 1 AULA de Espanhol na semana inteira para aquela turma (JAMAIS aloque 2 ou mais aulas de Espanhol).
 3. ZERO CONFLITOS DE PROFESSOR: Um professor não pode lecionar em 2 turmas no mesmo dia e mesmo horário.
 4. MÁXIMO DE 2 AULAS POR DIA DA MESMA MATÉRIA: Não coloque mais de 2 aulas da mesma matéria no mesmo dia em uma turma.
 5. DISPONIBILIDADE: Respeite os dias de trabalho, turno e disponibilidades dos professores.
@@ -215,7 +217,7 @@ Dados Enviados:
 Retorne em JSON:
 - slots: Array de ScheduleSlot (class_id, teacher_id, subject, day_of_week, start_time, end_time).
 - conflicts: Array de strings contendo explicações claras de qualquer conflito de horário ou indisponibilidade de professor encontrada.
-- summary: Resumo das aulas organizadas por turma respeitando o horário reduzido oficial.
+- summary: Resumo das aulas organizadas por turma respeitando rigorosamente as cargas horárias e o horário reduzido oficial.
 `;
 
     const response = await ai.models.generateContent({
@@ -223,7 +225,7 @@ Retorne em JSON:
       contents: promptText,
       config: {
         systemInstruction:
-          'Você é um algoritmo especialista sênior em alocação de grades escolares do Colégio Reação. REGRA ABSOLUTA: Turmas de 6º/7º/8º ano têm 5 aulas na seg/qua/sex (saída antecipada) e 6 aulas na ter/qui. 9º ano e Ensino Médio têm 6 aulas todos os dias. Preencha 100% dos horários válidos sem deixar aulas vagas acidentais.',
+          'Você é um algoritmo especialista sênior em alocação de grades escolares do Colégio Reação. REGRA ABSOLUTA: Respeite rigorosamente a carga horária de cada matéria (ex: Espanhol = 1 aula/semana, NUNCA dê 2 aulas). Turmas de 6º/7º/8º ano têm 5 aulas na seg/qua/sex e 6 na ter/qui. 9º ano e Médio têm 6 aulas todos os dias. Preencha 100% dos horários válidos sem deixar aulas vagas.',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -260,13 +262,20 @@ Retorne em JSON:
       let slots: any[] = parsedData.slots || [];
       const conflicts: string[] = parsedData.conflicts || [];
 
-      // --- POST-PROCESSING GUARD: GUARANTEE ZERO UNINTENDED FREE SLOTS ---
+      // --- POST-PROCESSING GUARD: GUARANTEE ZERO UNINTENDED FREE SLOTS WHILE RESPECTING WORKLOADS ---
       targetClasses.forEach((cls: any) => {
         const clsBlocks = timeBlocks
           .filter((b: any) => b.class_id === cls.id && !b.is_interval)
           .sort((a: any, b: any) => a.start_time.localeCompare(b.start_time));
 
         const is678 = is678Grade(cls.name);
+        const workloads = cls.subject_workloads || {};
+        const normWorkloads: { [key: string]: number } = {};
+        Object.entries(workloads).forEach(([s, h]) => {
+          if (s && typeof h === 'number' && h > 0) {
+            normWorkloads[s.trim().toUpperCase()] = h;
+          }
+        });
 
         daysList.forEach((day) => {
           const isShortDay = is678 && (day === 'segunda' || day === 'quarta' || day === 'sexta');
@@ -282,22 +291,17 @@ Retorne em JSON:
             );
 
             if (!exists) {
-              // Find candidates for this class
+              // Find candidate teachers available on this day and time block
               const qualTeachers = teachers.filter((t: any) => {
-                // Check if available on day
                 if (t.available_days && t.available_days.length > 0 && !t.available_days.includes(day)) {
                   return false;
                 }
-                // Check shift
                 const hour = parseInt(block.start_time.split(':')[0] || '0', 10);
                 const isMorning = hour < 12;
                 if (t.availability_shift === 'matutino' && !isMorning) return false;
                 if (t.availability_shift === 'vespertino' && isMorning) return false;
-
-                // Check group
                 if (t.groups && t.groups.length > 0 && !t.groups.includes(cls.group)) return false;
 
-                // Check conflict with other classes at same time
                 const hasConflict = slots.some(
                   (s: any) =>
                     s.teacher_id === t.id &&
@@ -307,32 +311,70 @@ Retorne em JSON:
                 return !hasConflict;
               });
 
-              if (qualTeachers.length > 0) {
-                // Pick teacher with subject that has < 2 lessons in this day
-                let chosenTeacher = qualTeachers[0];
-                let chosenSubject = chosenTeacher.subjects && chosenTeacher.subjects[0] ? chosenTeacher.subjects[0] : 'Geral';
+              let chosen: { teacher: any; subject: string } | null = null;
 
-                for (const t of qualTeachers) {
-                  for (const sub of (t.subjects || [])) {
+              // PASS 1: Select subject under its defined workload limit
+              for (const t of qualTeachers) {
+                for (const sub of (t.subjects || [])) {
+                  const subUpper = sub.trim().toUpperCase();
+                  const targetH = normWorkloads[subUpper] || 0;
+                  const currentAllocated = slots.filter(
+                    (s: any) => s.class_id === cls.id && s.subject.trim().toUpperCase() === subUpper
+                  ).length;
+
+                  if (targetH > 0 && currentAllocated < targetH) {
                     const countInDay = slots.filter(
                       (s: any) =>
                         s.class_id === cls.id &&
                         s.day_of_week === day &&
-                        s.subject.toUpperCase().trim() === sub.toUpperCase().trim()
+                        s.subject.trim().toUpperCase() === subUpper
                     ).length;
 
                     if (countInDay < 2) {
-                      chosenTeacher = t;
-                      chosenSubject = sub;
+                      chosen = { teacher: t, subject: sub };
                       break;
                     }
                   }
                 }
+                if (chosen) break;
+              }
 
+              // PASS 2: If no under-workload subject found, select core subject but NEVER exceed 1 or 2-hour capped subjects (like Espanhol)
+              if (!chosen) {
+                for (const t of qualTeachers) {
+                  for (const sub of (t.subjects || [])) {
+                    const subUpper = sub.trim().toUpperCase();
+                    const targetH = normWorkloads[subUpper] || 0;
+                    const currentAllocated = slots.filter(
+                      (s: any) => s.class_id === cls.id && s.subject.trim().toUpperCase() === subUpper
+                    ).length;
+
+                    // STRICT CAP: Never duplicate Espanhol, Artes, Filosofia, etc. if target <= 2
+                    if (targetH > 0 && targetH <= 2 && currentAllocated >= targetH) {
+                      continue;
+                    }
+
+                    const countInDay = slots.filter(
+                      (s: any) =>
+                        s.class_id === cls.id &&
+                        s.day_of_week === day &&
+                        s.subject.trim().toUpperCase() === subUpper
+                    ).length;
+
+                    if (countInDay < 2) {
+                      chosen = { teacher: t, subject: sub };
+                      break;
+                    }
+                  }
+                  if (chosen) break;
+                }
+              }
+
+              if (chosen) {
                 slots.push({
                   class_id: cls.id,
-                  teacher_id: chosenTeacher.id,
-                  subject: chosenSubject,
+                  teacher_id: chosen.teacher.id,
+                  subject: chosen.subject,
                   day_of_week: day,
                   start_time: block.start_time,
                   end_time: block.end_time

@@ -2224,7 +2224,21 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 );
 
                 if (!isOccupied) {
-                  // Fill gap
+                  // Calculate normalized workloads for this class
+                  let workloads = cls.subject_workloads;
+                  if (!workloads || Object.keys(workloads).length === 0) {
+                    workloads = cls.group === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
+                                cls.group === 'anos_iniciais' ? DEFAULT_INICIAIS_WORKLOAD :
+                                cls.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
+                  }
+                  const normWorkloads: { [key: string]: number } = {};
+                  Object.entries(workloads || {}).forEach(([s, h]) => {
+                    if (s && typeof h === 'number' && h > 0) {
+                      normWorkloads[s.trim().toUpperCase()] = h;
+                    }
+                  });
+
+                  // Available teachers with no conflict
                   const availableTeachers = teachers.filter(t => {
                     if (t.available_days && t.available_days.length > 0 && !t.available_days.includes(day)) return false;
                     const hour = parseInt(block.start_time.split(':')[0] || '0', 10);
@@ -2242,31 +2256,69 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                     return !hasConflict;
                   });
 
-                  if (availableTeachers.length > 0) {
-                    let chosenTeacher = availableTeachers[0];
-                    let chosenSubject = chosenTeacher.subjects && chosenTeacher.subjects[0] ? chosenTeacher.subjects[0] : 'Geral';
+                  let chosen: { teacher: Teacher; subject: string } | null = null;
 
-                    for (const t of availableTeachers) {
-                      for (const sub of (t.subjects || ['Geral'])) {
+                  // PASS 1: Select a subject under its defined workload limit
+                  for (const t of availableTeachers) {
+                    for (const sub of (t.subjects || ['Geral'])) {
+                      const subUpper = sub.trim().toUpperCase();
+                      const targetH = normWorkloads[subUpper] || 0;
+                      const currentAllocated = completeSlots.filter(s =>
+                        s.class_id === cls.id && s.subject.trim().toUpperCase() === subUpper
+                      ).length;
+
+                      if (targetH > 0 && currentAllocated < targetH) {
                         const countInDay = completeSlots.filter(s =>
                           s.class_id === cls.id &&
                           s.day_of_week === day &&
-                          s.subject.toUpperCase().trim() === sub.toUpperCase().trim()
+                          s.subject.trim().toUpperCase() === subUpper
                         ).length;
 
                         if (countInDay < 2) {
-                          chosenTeacher = t;
-                          chosenSubject = sub;
+                          chosen = { teacher: t, subject: sub };
                           break;
                         }
                       }
                     }
+                    if (chosen) break;
+                  }
 
+                  // PASS 2: Fallback to core subjects, strictly avoiding duplicate Espanhol / 1-2h capped subjects
+                  if (!chosen) {
+                    for (const t of availableTeachers) {
+                      for (const sub of (t.subjects || ['Geral'])) {
+                        const subUpper = sub.trim().toUpperCase();
+                        const targetH = normWorkloads[subUpper] || 0;
+                        const currentAllocated = completeSlots.filter(s =>
+                          s.class_id === cls.id && s.subject.trim().toUpperCase() === subUpper
+                        ).length;
+
+                        // STRICT CAP: Never exceed Espanhol or subjects with target <= 2
+                        if (targetH > 0 && targetH <= 2 && currentAllocated >= targetH) {
+                          continue;
+                        }
+
+                        const countInDay = completeSlots.filter(s =>
+                          s.class_id === cls.id &&
+                          s.day_of_week === day &&
+                          s.subject.trim().toUpperCase() === subUpper
+                        ).length;
+
+                        if (countInDay < 2) {
+                          chosen = { teacher: t, subject: sub };
+                          break;
+                        }
+                      }
+                      if (chosen) break;
+                    }
+                  }
+
+                  if (chosen) {
                     completeSlots.push({
                       id: crypto.randomUUID(),
                       class_id: cls.id,
-                      teacher_id: chosenTeacher.id,
-                      subject: chosenSubject,
+                      teacher_id: chosen.teacher.id,
+                      subject: chosen.subject,
                       day_of_week: day,
                       start_time: block.start_time,
                       end_time: block.end_time
@@ -2700,13 +2752,16 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 normalizedWorkloads[key] = (normalizedWorkloads[key] || 0) + hours;
               });
 
-              // First pass: try class subjects
+              // First pass: try class subjects that are under target workload
               const classSubjects = Object.keys(normalizedWorkloads);
               classSubjects.forEach(subUpper => {
                 const targetHours = normalizedWorkloads[subUpper] || 0;
                 const scheduledForSub = trialRunningSlots.filter(s =>
                   s.class_id === cls.id && s.subject.toUpperCase().trim() === subUpper
                 ).length;
+
+                // STRICT: If subject has already reached target workload, do not add more in Pass 1!
+                if (targetHours > 0 && scheduledForSub >= targetHours) return;
 
                 const qTeachers = teachers.filter(t =>
                   t.subjects.some(sub => sub.toUpperCase().trim() === subUpper) &&
@@ -2733,20 +2788,15 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
 
                   if (dayLessonsCount >= 2) return; // Máximo de 2 aulas da mesma matéria por dia para uma turma
 
-                  let penalty = 0;
-                  if (scheduledForSub < targetHours) {
-                    penalty -= 1000;
-                  }
-
                   candidates.push({
                     teacher: t,
                     subjectName: getDisplaySubjectName(subUpper),
-                    penalty
+                    penalty: -1000
                   });
                 });
               });
 
-              // Fallback pass: try any available teacher for this group to guarantee zero free slots
+              // Fallback pass: try any available teacher for this group to guarantee zero free slots, strictly avoiding duplicate Espanhol
               if (candidates.length === 0) {
                 const groupTeachers = teachers.filter(t =>
                   t.groups.includes(cls.group) &&
@@ -2764,18 +2814,44 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                   });
                   if (hasTeacherConflict) return;
 
-                  const firstSub = t.subjects && t.subjects[0] ? t.subjects[0] : 'Geral';
-                  const dayLessonsCount = trialRunningSlots.filter(s =>
-                    s.class_id === cls.id &&
-                    s.day_of_week === day &&
-                    s.subject.toUpperCase().trim() === firstSub.toUpperCase().trim()
+                  // Find a subject from teacher that is NOT Espanhol or capped if already at target
+                  let suitableSub = t.subjects && t.subjects[0] ? t.subjects[0] : 'Geral';
+                  for (const sub of (t.subjects || ['Geral'])) {
+                    const subUpper = sub.toUpperCase().trim();
+                    const targetHours = normalizedWorkloads[subUpper] || 0;
+                    const currentAllocated = trialRunningSlots.filter(s =>
+                      s.class_id === cls.id && s.subject.toUpperCase().trim() === subUpper
+                    ).length;
+
+                    if (targetHours > 0 && targetHours <= 2 && currentAllocated >= targetHours) {
+                      continue; // Skip capped subjects like Espanhol
+                    }
+
+                    const dayLessonsCount = trialRunningSlots.filter(s =>
+                      s.class_id === cls.id &&
+                      s.day_of_week === day &&
+                      s.subject.toUpperCase().trim() === subUpper
+                    ).length;
+
+                    if (dayLessonsCount < 2) {
+                      suitableSub = sub;
+                      break;
+                    }
+                  }
+
+                  const subUpper = suitableSub.toUpperCase().trim();
+                  const targetHours = normalizedWorkloads[subUpper] || 0;
+                  const currentAllocated = trialRunningSlots.filter(s =>
+                    s.class_id === cls.id && s.subject.toUpperCase().trim() === subUpper
                   ).length;
 
-                  if (dayLessonsCount >= 2) return;
+                  if (targetHours > 0 && targetHours <= 2 && currentAllocated >= targetHours) {
+                    return; // Do not push if it's Espanhol or capped
+                  }
 
                   candidates.push({
                     teacher: t,
-                    subjectName: getDisplaySubjectName(firstSub),
+                    subjectName: getDisplaySubjectName(suitableSub),
                     penalty: 500
                   });
                 });
