@@ -253,6 +253,46 @@ const isSameTeacher = (t1Id?: string, t1Name?: string, t2Id?: string, t2Name?: s
   return false;
 };
 
+const isTeacherAvailable = (
+  teacher: any,
+  day: string,
+  block: { start_time: string; end_time?: string },
+  blockIdx: number
+): boolean => {
+  if (!teacher) return false;
+
+  // 1. Available days
+  if (teacher.available_days && Array.isArray(teacher.available_days) && teacher.available_days.length > 0) {
+    if (!teacher.available_days.includes(day)) return false;
+  }
+
+  // 2. Availability shift
+  const startMin = timeToMinutes(block.start_time);
+  const isMorning = startMin < 780; // Before 13:00 is morning
+  if (teacher.availability_shift === 'matutino' && !isMorning) return false;
+  if (teacher.availability_shift === 'vespertino' && isMorning) return false;
+
+  // 3. Available slots (1-based index)
+  const slotNum = blockIdx + 1;
+  if (teacher.available_slots && Array.isArray(teacher.available_slots) && teacher.available_slots.length > 0) {
+    if (!teacher.available_slots.includes(slotNum)) return false;
+  }
+
+  // 4. Availability grid
+  if (teacher.availability_grid && typeof teacher.availability_grid === 'object') {
+    const keyDash = `${day}-${slotNum}`;
+    const keyUnderscore = `${day}_${slotNum}`;
+    const keyTime = `${day}-${block.start_time}`;
+    if (teacher.availability_grid[keyDash] === false || 
+        teacher.availability_grid[keyUnderscore] === false || 
+        teacher.availability_grid[keyTime] === false) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
 const makeDoubleLessonsConsecutive = (
   inputSlots: any[],
   targetClasses: any[],
@@ -480,39 +520,37 @@ Retorne em JSON:
       let rawSlots: any[] = parsedData.slots || [];
       const conflicts: string[] = parsedData.conflicts || [];
 
-      const normSub = (s: string) => (s || '').trim().toUpperCase();
-
       // Step 1: Enforce MAX 2 LESSONS PER DAY PER SUBJECT PER CLASS
       targetClasses.forEach((cls: any) => {
         daysList.forEach((day) => {
           const subjectCounts: { [s: string]: number } = {};
           rawSlots = rawSlots.filter((s: any) => {
             if (s.class_id !== cls.id || s.day_of_week !== day) return true;
-            const sub = normSub(s.subject);
-            subjectCounts[sub] = (subjectCounts[sub] || 0) + 1;
-            return subjectCounts[sub] <= 2; // Keep max 2
+            const subKey = normalizeSubjectName(s.subject);
+            subjectCounts[subKey] = (subjectCounts[subKey] || 0) + 1;
+            return subjectCounts[subKey] <= 2; // Keep max 2
           });
         });
       });
 
-      // Step 2: Enforce Weekly Capped Workload Limits (e.g. Espanhol = 1h, Artes = 2h)
+      // Step 2: Enforce Weekly Capped Workload Limits (STRICT: e.g. Espanhol = 1h, Artes = 2h)
       targetClasses.forEach((cls: any) => {
         const workloads = cls.subject_workloads || {};
         Object.entries(workloads).forEach(([sub, h]: [string, any]) => {
           const targetH = typeof h === 'number' ? h : 0;
-          const subUpper = normSub(sub);
-          if (targetH > 0 && targetH <= 2) {
+          if (targetH > 0) {
             let count = 0;
             rawSlots = rawSlots.filter((s: any) => {
-              if (s.class_id !== cls.id || normSub(s.subject) !== subUpper) return true;
+              if (s.class_id !== cls.id) return true;
+              if (!isSameSubject(s.subject, sub)) return true;
               count++;
-              return count <= targetH;
+              return count <= targetH; // STRICTLY CAPPED AT targetH
             });
           }
         });
       });
 
-      // Step 3: Remove Teacher Time Conflicts (considering same teacher under different IDs/names like Gilva)
+      // Step 3: Remove Teacher Time Conflicts (considering same physical teacher like Gilva)
       const teacherTimeMap = new Set<string>();
       rawSlots = rawSlots.filter((s: any) => {
         const teacher = teachers.find((t: any) => t.id === s.teacher_id);
@@ -526,7 +564,7 @@ Retorne em JSON:
 
       let slots: any[] = [...rawSlots];
 
-      // Step 4: GUARANTEE ZERO UNINTENDED FREE SLOTS WHILE RESPECTING WORKLOADS
+      // Step 4: FILL EMPTY SLOTS ONLY IF A SUBJECT STILL HAS REMAINING WORKLOAD
       targetClasses.forEach((cls: any) => {
         const clsBlocks = timeBlocks
           .filter((b: any) => b.class_id === cls.id && !b.is_interval)
@@ -549,15 +587,9 @@ Retorne em JSON:
             );
 
             if (!exists) {
-              // Candidate teachers available without time conflict
+              // Candidate teachers available without time conflict and respecting availability
               const qualTeachers = teachers.filter((t: any) => {
-                if (t.available_days && t.available_days.length > 0 && !t.available_days.includes(day)) {
-                  return false;
-                }
-                const startMin = timeToMinutes(block.start_time);
-                const isMorning = startMin < 780; // Before 13:00 (1:00 PM) is morning shift
-                if (t.availability_shift === 'matutino' && !isMorning) return false;
-                if (t.availability_shift === 'vespertino' && isMorning) return false;
+                if (!isTeacherAvailable(t, day, block, blockIdx)) return false;
 
                 const hasConflict = slots.some((s: any) => {
                   if (s.day_of_week !== day || s.start_time !== block.start_time) return false;
@@ -569,10 +601,10 @@ Retorne em JSON:
 
               let chosen: { teacher: any; subject: string } | null = null;
 
-              // Tier 1: Group teacher + subject under target workload
+              // Priority 1: Group teachers with subject under target workload
               const groupTeachers = qualTeachers.filter((t: any) => !t.groups || t.groups.length === 0 || t.groups.includes(cls.group));
               for (const t of groupTeachers) {
-                for (const sub of (t.subjects || ['Geral'])) {
+                for (const sub of (t.subjects || [])) {
                   let targetH = 0;
                   for (const [wSub, h] of Object.entries(workloads)) {
                     if (isSameSubject(wSub, sub) && typeof h === 'number') {
@@ -581,47 +613,20 @@ Retorne em JSON:
                     }
                   }
                   const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
+                  const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
 
-                  if (targetH > 0 && currentWeekly < targetH) {
-                    const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
-                    if (countInDay < 2) {
-                      chosen = { teacher: t, subject: sub };
-                      break;
-                    }
+                  if (targetH > 0 && currentWeekly < targetH && countInDay < 2) {
+                    chosen = { teacher: t, subject: sub };
+                    break;
                   }
                 }
                 if (chosen) break;
               }
 
-              // Tier 2: Group teacher + uncapped core subject
-              if (!chosen) {
-                for (const t of groupTeachers) {
-                  for (const sub of (t.subjects || ['Geral'])) {
-                    let targetH = 0;
-                    for (const [wSub, h] of Object.entries(workloads)) {
-                      if (isSameSubject(wSub, sub) && typeof h === 'number') {
-                        targetH = h;
-                        break;
-                      }
-                    }
-                    const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
-
-                    if (targetH > 0 && targetH <= 2 && currentWeekly >= targetH) continue; // Capped
-
-                    const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
-                    if (countInDay < 2) {
-                      chosen = { teacher: t, subject: sub };
-                      break;
-                    }
-                  }
-                  if (chosen) break;
-                }
-              }
-
-              // Tier 3: Any available teacher in school without conflict
+              // Priority 2: Any available teacher with a subject that still needs weekly hours
               if (!chosen) {
                 for (const t of qualTeachers) {
-                  for (const sub of (t.subjects || ['Geral'])) {
+                  for (const sub of (t.subjects || [])) {
                     let targetH = 0;
                     for (const [wSub, h] of Object.entries(workloads)) {
                       if (isSameSubject(wSub, sub) && typeof h === 'number') {
@@ -630,11 +635,9 @@ Retorne em JSON:
                       }
                     }
                     const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
-
-                    if (targetH > 0 && targetH <= 2 && currentWeekly >= targetH) continue; // Capped
-
                     const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
-                    if (countInDay < 2) {
+
+                    if (targetH > 0 && currentWeekly < targetH && countInDay < 2) {
                       chosen = { teacher: t, subject: sub };
                       break;
                     }
@@ -643,32 +646,28 @@ Retorne em JSON:
                 }
               }
 
-              // Tier 4: Fallback - pick any subject in workloads that needs weekly hours
+              // Priority 3: Any subject in workloads that still needs weekly hours
               if (!chosen) {
                 for (const [wSub, h] of Object.entries(workloads)) {
                   if (typeof h !== 'number' || h <= 0) continue;
                   const currentWeekly = countWeeklySlotsForSubject(cls.id, wSub, slots);
                   if (currentWeekly < h) {
-                    const matchingTeacher = qualTeachers.find((t: any) =>
-                      (t.subjects || []).some((ts: string) => isSameSubject(ts, wSub))
-                    );
-                    if (matchingTeacher) {
-                      chosen = { teacher: matchingTeacher, subject: wSub };
-                      break;
+                    const countInDay = countDaySlotsForSubject(cls.id, day, wSub, slots);
+                    if (countInDay < 2) {
+                      const matchingTeacher = qualTeachers.find((t: any) =>
+                        (t.subjects || []).some((ts: string) => isSameSubject(ts, wSub))
+                      );
+                      if (matchingTeacher) {
+                        chosen = { teacher: matchingTeacher, subject: wSub };
+                        break;
+                      }
                     }
                   }
                 }
               }
 
-              // Tier 5: Absolute Fallback - pick any teacher without time conflict
-              if (!chosen) {
-                for (const t of qualTeachers) {
-                  const sub = (t.subjects && t.subjects[0]) || 'Geral';
-                  chosen = { teacher: t, subject: sub };
-                  break;
-                }
-              }
-
+              // NOTE: WE DO NOT FORCE ANY UNQUALIFIED / OVER-WORKLOAD ASSIGNMENTS.
+              // If no valid teacher/subject pair exists without breaking rules, the slot remains empty!
               if (chosen) {
                 slots.push({
                   class_id: cls.id,
@@ -678,13 +677,15 @@ Retorne em JSON:
                   start_time: block.start_time,
                   end_time: block.end_time
                 });
+              } else {
+                conflicts.push(`Turma ${cls.name}: O horário de ${day} às ${block.start_time} não pôde ser preenchido sem violar a carga horária das disciplinas ou indisponibilidade dos professores.`);
               }
             }
           });
         });
       });
 
-      // Step 5: MAKE ALL DOUBLE LESSONS CONSECUTIVE (DOBRADINHAS)
+      // Step 5: Make all double lessons consecutive (dobradinhas coladas)
       slots = makeDoubleLessonsConsecutive(slots, targetClasses, teachers, timeBlocks);
 
       return res.json({
