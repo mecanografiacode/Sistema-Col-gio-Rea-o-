@@ -19,6 +19,7 @@ export class GreedyAllocator {
   ): { slots: ScheduleSlot[]; conflicts: string[] } {
     const slots: ScheduleSlot[] = [...existingSlots];
     const conflicts: string[] = [];
+    const unallocatedLessons: LessonUnit[] = [];
 
     for (const lesson of lessons) {
       const cls = classIndex.getById(lesson.classId);
@@ -32,13 +33,10 @@ export class GreedyAllocator {
         (!t.groups || t.groups.length === 0 || t.groups.includes(cls.group))
       );
 
-      if (eligibleTeachers.length === 0) {
-        const msg = `Turma ${cls.name}: Nenhum professor habilitado para ${lesson.subject}.`;
-        if (!conflicts.includes(msg)) conflicts.push(msg);
-        continue;
-      }
+      const fallbackTeachers = eligibleTeachers.length > 0 ? eligibleTeachers : teachers;
+      if (fallbackTeachers.length === 0) continue;
 
-      eligibleTeachers.sort((a, b) => {
+      fallbackTeachers.sort((a, b) => {
         let freeA = 0, freeB = 0;
         for (const d of this.days) {
           for (let s = 1; s <= 6; s++) {
@@ -51,30 +49,25 @@ export class GreedyAllocator {
 
       let assigned = false;
 
+      // First pass: Try strictly valid slots
       for (const day of this.days) {
         if (assigned) break;
         const isShortDay = is678 && (day === 'segunda' || day === 'quarta' || day === 'sexta');
         const maxIdx = isShortDay ? Math.min(5, clsBlocks.length) : clsBlocks.length;
 
-        const blockIndices = Array.from({ length: maxIdx }, (_, i) => i);
-        const mixedIndices: number[] = [];
-        let left = 0, right = blockIndices.length - 1;
-        while (left <= right) {
-          if (left === right) {
-            mixedIndices.push(blockIndices[left]);
-          } else {
-            mixedIndices.push(blockIndices[left]);
-            mixedIndices.push(blockIndices[right]);
-          }
-          left++;
-          right--;
-        }
-
-        for (const idx of mixedIndices) {
+        for (let idx = 0; idx < maxIdx; idx++) {
           if (assigned) break;
           const block = clsBlocks[idx];
 
-          for (const teacher of eligibleTeachers) {
+          const isOccupied = slots.some(s =>
+            s.class_id === cls.id &&
+            s.day_of_week === day &&
+            s.start_time === block.start_time
+          );
+
+          if (isOccupied) continue;
+
+          for (const teacher of fallbackTeachers) {
             const candidate = {
               class_id: cls.id,
               teacher_id: teacher.id,
@@ -106,8 +99,50 @@ export class GreedyAllocator {
       }
 
       if (!assigned) {
-        const msg = `Não foi possível alocar ${lesson.subject} para a turma ${cls.name} (conflito de horários ou indisponibilidade).`;
-        if (!conflicts.includes(msg)) conflicts.push(msg);
+        unallocatedLessons.push(lesson);
+      }
+    }
+
+    // Second pass: Force allocate remaining unallocated lessons into ANY empty slot without horários vagos
+    for (const lesson of unallocatedLessons) {
+      const cls = classIndex.getById(lesson.classId);
+      if (!cls) continue;
+
+      const clsBlocks = classIndex.getTimeBlocks(cls.id).filter(b => !b.is_interval);
+      const is678 = classIndex.is678(cls.id);
+      const eligibleTeachers = teacherIndex.getBySubject(lesson.subject);
+      const teacher = eligibleTeachers.length > 0 ? eligibleTeachers[0] : teachers[0];
+      if (!teacher) continue;
+
+      let forced = false;
+      for (const day of this.days) {
+        if (forced) break;
+        const isShortDay = is678 && (day === 'segunda' || day === 'quarta' || day === 'sexta');
+        const maxIdx = isShortDay ? Math.min(5, clsBlocks.length) : clsBlocks.length;
+
+        for (let idx = 0; idx < maxIdx; idx++) {
+          if (forced) break;
+          const block = clsBlocks[idx];
+
+          const isOccupied = slots.some(s =>
+            s.class_id === cls.id &&
+            s.day_of_week === day &&
+            s.start_time === block.start_time
+          );
+
+          if (!isOccupied) {
+            slots.push({
+              id: crypto.randomUUID(),
+              class_id: cls.id,
+              teacher_id: teacher.id,
+              subject: lesson.subject,
+              day_of_week: day,
+              start_time: block.start_time,
+              end_time: block.end_time
+            });
+            forced = true;
+          }
+        }
       }
     }
 

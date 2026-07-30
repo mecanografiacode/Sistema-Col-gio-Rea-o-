@@ -1610,12 +1610,14 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
   } | null>(null);
 
   const checkSlotConflict = (slot: ScheduleSlot): { isConflict: boolean; reason: string; conflictingClasses: string[] } => {
-    const conflictingSlots = scheduleSlots.filter(s => 
-      s.id !== slot.id &&
-      s.teacher_id === slot.teacher_id &&
-      s.day_of_week === slot.day_of_week &&
-      timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)
-    );
+    const teacher1 = teachers.find(t => t.id === slot.teacher_id);
+    const conflictingSlots = scheduleSlots.filter(s => {
+      if (s.id === slot.id) return false;
+      if (s.day_of_week !== slot.day_of_week) return false;
+      if (!timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)) return false;
+      const teacher2 = teachers.find(t => t.id === s.teacher_id);
+      return isSameTeacher(slot.teacher_id, teacher1?.name, s.teacher_id, teacher2?.name);
+    });
 
     const teacher = teachers.find(t => t.id === slot.teacher_id);
     let reason = '';
@@ -1839,13 +1841,14 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
       const checkConflictsForList = (slots: ScheduleSlot[]) => {
         const list: string[] = [];
         slots.forEach(slot => {
-          // Inner check similar to checkSlotConflict but local to current list
-          const conflictingSlots = slots.filter(s => 
-            s.id !== slot.id &&
-            s.teacher_id === slot.teacher_id &&
-            s.day_of_week === slot.day_of_week &&
-            timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)
-          );
+          const teacher1 = teachers.find(t => t.id === slot.teacher_id);
+          const conflictingSlots = slots.filter(s => {
+            if (s.id === slot.id) return false;
+            if (s.day_of_week !== slot.day_of_week) return false;
+            if (!timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)) return false;
+            const teacher2 = teachers.find(t => t.id === s.teacher_id);
+            return isSameTeacher(slot.teacher_id, teacher1?.name, s.teacher_id, teacher2?.name);
+          });
 
           const teacher = teachers.find(t => t.id === slot.teacher_id);
           let reason = '';
