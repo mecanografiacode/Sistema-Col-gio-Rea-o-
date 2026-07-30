@@ -2199,7 +2199,9 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
       };
 
       const isTeacherAvailable = (teacher: Teacher, day: DayOfWeek, block: TimeBlock, clsBlocks: TimeBlock[]) => {
-        if (!teacher.available_days?.includes(day)) return false;
+        if (teacher.available_days && teacher.available_days.length > 0) {
+          if (!teacher.available_days.includes(day)) return false;
+        }
         const startHour = parseInt(normalizeTime(block.start_time).split(':')[0]);
         const isMorning = startHour < 13;
         if (teacher.availability_shift === 'matutino' && !isMorning) return false;
@@ -2333,53 +2335,19 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 continue; // Proibido estritamente ultrapassar 3 aulas da mesma matéria por turma no dia
               }
 
-              // Satisfies physical hard constraints. Now compute penalties according to exact rules.
-              let penalty = 0;
-
-              // REGRA 1: Disponibilidade do Professor
-              // 1.1 Dias disponíveis
-              if (!t.available_days?.includes(day)) {
-                penalty += 5000;
-              }
-
-              // 1.2 Turno do professor (matutino / vespertino)
-              const startHour = parseInt(normalizeTime(b1.start_time).split(':')[0]);
-              const isMorning = startHour < 13;
-              if (t.availability_shift === 'matutino' && !isMorning) {
-                penalty += 5000;
-              }
-              if (t.availability_shift === 'vespertino' && isMorning) {
-                penalty += 5000;
-              }
-
-              // 1.3 Grade / Horários específicos do professor
-              const slotIndex1 = i + 1;
-              if (t.available_slots && t.available_slots.length > 0 && t.available_slots.length < 6) {
-                if (!t.available_slots.includes(slotIndex1)) {
-                  penalty += 2000;
-                }
-              }
-              if (t.availability_grid && Object.keys(t.availability_grid).length > 0) {
-                const key1 = `${day}-${slotIndex1}`;
-                if (t.availability_grid[key1] === false) {
-                  penalty += 3000;
-                }
+              // REGRA 1 (RESTRIÇÃO RÍGIDA): Disponibilidade do Professor (Dias, Turno, Horários e Grade)
+              if (!isTeacherAvailable(t, day, b1, clsBlocks)) {
+                continue; // Proibido: Professor não tem disponibilidade neste dia/turno/horário
               }
 
               if (m.size === 2) {
-                const slotIndex2 = i + 2;
-                if (t.available_slots && t.available_slots.length > 0 && t.available_slots.length < 6) {
-                  if (!t.available_slots.includes(slotIndex2)) {
-                    penalty += 2000;
-                  }
-                }
-                if (t.availability_grid && Object.keys(t.availability_grid).length > 0) {
-                  const key2 = `${day}-${slotIndex2}`;
-                  if (t.availability_grid[key2] === false) {
-                    penalty += 3000;
-                  }
+                const b2 = clsBlocks[i + 1];
+                if (!isTeacherAvailable(t, day, b2, clsBlocks)) {
+                  continue; // Proibido: Professor não tem disponibilidade no 2º horário da aula dupla
                 }
               }
+
+              let penalty = 0;
 
               // REGRA 2: O professor que tem poucas aulas (ex: 1 a 6 no total) deve dar aulas no mesmo dia para todos os segmentos
               const teacherAssignedHours = trialRunningSlots.filter(s => s.teacher_id === t.id).length;
