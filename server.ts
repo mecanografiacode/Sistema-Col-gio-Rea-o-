@@ -259,10 +259,53 @@ Retorne em JSON:
 
     if (response.text) {
       const parsedData = JSON.parse(response.text);
-      let slots: any[] = parsedData.slots || [];
+      let rawSlots: any[] = parsedData.slots || [];
       const conflicts: string[] = parsedData.conflicts || [];
 
-      // --- POST-PROCESSING GUARD: GUARANTEE ZERO UNINTENDED FREE SLOTS WHILE RESPECTING WORKLOADS ---
+      const normSub = (s: string) => (s || '').trim().toUpperCase();
+
+      // Step 1: Enforce MAX 2 LESSONS PER DAY PER SUBJECT PER CLASS
+      targetClasses.forEach((cls: any) => {
+        daysList.forEach((day) => {
+          const subjectCounts: { [s: string]: number } = {};
+          rawSlots = rawSlots.filter((s: any) => {
+            if (s.class_id !== cls.id || s.day_of_week !== day) return true;
+            const sub = normSub(s.subject);
+            subjectCounts[sub] = (subjectCounts[sub] || 0) + 1;
+            return subjectCounts[sub] <= 2; // Keep max 2
+          });
+        });
+      });
+
+      // Step 2: Enforce Weekly Capped Workload Limits (e.g. Espanhol = 1h, Artes = 2h)
+      targetClasses.forEach((cls: any) => {
+        const workloads = cls.subject_workloads || {};
+        Object.entries(workloads).forEach(([sub, h]: [string, any]) => {
+          const targetH = typeof h === 'number' ? h : 0;
+          const subUpper = normSub(sub);
+          if (targetH > 0 && targetH <= 2) {
+            let count = 0;
+            rawSlots = rawSlots.filter((s: any) => {
+              if (s.class_id !== cls.id || normSub(s.subject) !== subUpper) return true;
+              count++;
+              return count <= targetH;
+            });
+          }
+        });
+      });
+
+      // Step 3: Remove Teacher Time Conflicts (a teacher in 2 classes at once)
+      const teacherTimeMap = new Set<string>();
+      rawSlots = rawSlots.filter((s: any) => {
+        const key = `${s.teacher_id}_${s.day_of_week}_${s.start_time}`;
+        if (teacherTimeMap.has(key)) return false;
+        teacherTimeMap.add(key);
+        return true;
+      });
+
+      let slots: any[] = [...rawSlots];
+
+      // Step 4: GUARANTEE ZERO UNINTENDED FREE SLOTS WHILE RESPECTING WORKLOADS
       targetClasses.forEach((cls: any) => {
         const clsBlocks = timeBlocks
           .filter((b: any) => b.class_id === cls.id && !b.is_interval)
@@ -271,9 +314,9 @@ Retorne em JSON:
         const is678 = is678Grade(cls.name);
         const workloads = cls.subject_workloads || {};
         const normWorkloads: { [key: string]: number } = {};
-        Object.entries(workloads).forEach(([s, h]) => {
+        Object.entries(workloads).forEach(([s, h]: [string, any]) => {
           if (s && typeof h === 'number' && h > 0) {
-            normWorkloads[s.trim().toUpperCase()] = h;
+            normWorkloads[normSub(s)] = h;
           }
         });
 
@@ -291,7 +334,7 @@ Retorne em JSON:
             );
 
             if (!exists) {
-              // Find candidate teachers available on this day and time block
+              // Candidate teachers available without time conflict
               const qualTeachers = teachers.filter((t: any) => {
                 if (t.available_days && t.available_days.length > 0 && !t.available_days.includes(day)) {
                   return false;
@@ -300,7 +343,6 @@ Retorne em JSON:
                 const isMorning = hour < 12;
                 if (t.availability_shift === 'matutino' && !isMorning) return false;
                 if (t.availability_shift === 'vespertino' && isMorning) return false;
-                if (t.groups && t.groups.length > 0 && !t.groups.includes(cls.group)) return false;
 
                 const hasConflict = slots.some(
                   (s: any) =>
@@ -313,23 +355,16 @@ Retorne em JSON:
 
               let chosen: { teacher: any; subject: string } | null = null;
 
-              // PASS 1: Select subject under its defined workload limit
-              for (const t of qualTeachers) {
-                for (const sub of (t.subjects || [])) {
-                  const subUpper = sub.trim().toUpperCase();
+              // Tier 1: Group teacher + subject under target workload
+              const groupTeachers = qualTeachers.filter((t: any) => !t.groups || t.groups.length === 0 || t.groups.includes(cls.group));
+              for (const t of groupTeachers) {
+                for (const sub of (t.subjects || ['Geral'])) {
+                  const subUpper = normSub(sub);
                   const targetH = normWorkloads[subUpper] || 0;
-                  const currentAllocated = slots.filter(
-                    (s: any) => s.class_id === cls.id && s.subject.trim().toUpperCase() === subUpper
-                  ).length;
+                  const currentWeekly = slots.filter((s: any) => s.class_id === cls.id && normSub(s.subject) === subUpper).length;
 
-                  if (targetH > 0 && currentAllocated < targetH) {
-                    const countInDay = slots.filter(
-                      (s: any) =>
-                        s.class_id === cls.id &&
-                        s.day_of_week === day &&
-                        s.subject.trim().toUpperCase() === subUpper
-                    ).length;
-
+                  if (targetH > 0 && currentWeekly < targetH) {
+                    const countInDay = slots.filter((s: any) => s.class_id === cls.id && s.day_of_week === day && normSub(s.subject) === subUpper).length;
                     if (countInDay < 2) {
                       chosen = { teacher: t, subject: sub };
                       break;
@@ -339,28 +374,37 @@ Retorne em JSON:
                 if (chosen) break;
               }
 
-              // PASS 2: If no under-workload subject found, select core subject but NEVER exceed 1 or 2-hour capped subjects (like Espanhol)
+              // Tier 2: Group teacher + uncapped core subject
+              if (!chosen) {
+                for (const t of groupTeachers) {
+                  for (const sub of (t.subjects || ['Geral'])) {
+                    const subUpper = normSub(sub);
+                    const targetH = normWorkloads[subUpper] || 0;
+                    const currentWeekly = slots.filter((s: any) => s.class_id === cls.id && normSub(s.subject) === subUpper).length;
+
+                    if (targetH > 0 && targetH <= 2 && currentWeekly >= targetH) continue; // Capped
+
+                    const countInDay = slots.filter((s: any) => s.class_id === cls.id && s.day_of_week === day && normSub(s.subject) === subUpper).length;
+                    if (countInDay < 2) {
+                      chosen = { teacher: t, subject: sub };
+                      break;
+                    }
+                  }
+                  if (chosen) break;
+                }
+              }
+
+              // Tier 3: Any available teacher in school without conflict
               if (!chosen) {
                 for (const t of qualTeachers) {
-                  for (const sub of (t.subjects || [])) {
-                    const subUpper = sub.trim().toUpperCase();
+                  for (const sub of (t.subjects || ['Geral'])) {
+                    const subUpper = normSub(sub);
                     const targetH = normWorkloads[subUpper] || 0;
-                    const currentAllocated = slots.filter(
-                      (s: any) => s.class_id === cls.id && s.subject.trim().toUpperCase() === subUpper
-                    ).length;
+                    const currentWeekly = slots.filter((s: any) => s.class_id === cls.id && normSub(s.subject) === subUpper).length;
 
-                    // STRICT CAP: Never duplicate Espanhol, Artes, Filosofia, etc. if target <= 2
-                    if (targetH > 0 && targetH <= 2 && currentAllocated >= targetH) {
-                      continue;
-                    }
+                    if (targetH > 0 && targetH <= 2 && currentWeekly >= targetH) continue; // Capped
 
-                    const countInDay = slots.filter(
-                      (s: any) =>
-                        s.class_id === cls.id &&
-                        s.day_of_week === day &&
-                        s.subject.trim().toUpperCase() === subUpper
-                    ).length;
-
+                    const countInDay = slots.filter((s: any) => s.class_id === cls.id && s.day_of_week === day && normSub(s.subject) === subUpper).length;
                     if (countInDay < 2) {
                       chosen = { teacher: t, subject: sub };
                       break;
