@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { UserProfile, Teacher, SchoolClass, ScheduleSlot, EducationalGroup, DayOfWeek, TimeBlock, Subject } from '../../types';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -1478,6 +1478,29 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
   const [draggedOverCell, setDraggedOverCell] = useState<{ day: DayOfWeek, blockId: string } | null>(null);
   const [draggedSlotState, setDraggedSlotState] = useState<ScheduleSlot | null>(null);
 
+  // View mode & Matrix grid filters
+  const [viewMode, setViewMode] = useState<'matrix' | 'single'>('matrix');
+  const [matrixShift, setMatrixShift] = useState<'matutino' | 'vespertino'>('matutino');
+  const [matrixGroup, setMatrixGroup] = useState<string>('todos');
+
+  // Matrix cell editing
+  const [editingMatrixCell, setEditingMatrixCell] = useState<{
+    classId: string;
+    day: DayOfWeek;
+    startTime: string;
+    endTime: string;
+  } | null>(null);
+  const [matrixCellTeacherId, setMatrixCellTeacherId] = useState('');
+  const [matrixCellSubject, setMatrixCellSubject] = useState('');
+
+  // Matrix drag over state
+  const [draggedMatrixCell, setDraggedMatrixCell] = useState<{
+    classId: string;
+    day: DayOfWeek;
+    startTime: string;
+    endTime: string;
+  } | null>(null);
+
   const checkSlotConflict = (slot: ScheduleSlot): { isConflict: boolean; reason: string; conflictingClasses: string[] } => {
     const conflictingSlots = scheduleSlots.filter(s => 
       s.id !== slot.id &&
@@ -1774,6 +1797,250 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
 
     } catch (err) {
       console.error('Error during drag & drop drop handling:', err);
+    }
+  };
+
+  // Helper to check conflicts for a list of slots
+  const checkConflictsForList = (slots: ScheduleSlot[]) => {
+    const list: string[] = [];
+    slots.forEach(slot => {
+      const conflictingSlots = slots.filter(s => 
+        s.id !== slot.id &&
+        s.teacher_id === slot.teacher_id &&
+        s.day_of_week === slot.day_of_week &&
+        timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)
+      );
+
+      const teacher = teachers.find(t => t.id === slot.teacher_id);
+      let reason = '';
+      const dayMap: Record<string, string> = {
+        segunda: 'Segunda-feira',
+        terca: 'Terça-feira',
+        quarta: 'Quarta-feira',
+        quinta: 'Quinta-feira',
+        sexta: 'Sexta-feira'
+      };
+      const dayLabel = dayMap[slot.day_of_week] || slot.day_of_week;
+
+      if (teacher) {
+        if (teacher.available_days && teacher.available_days.length > 0 && !teacher.available_days.includes(slot.day_of_week)) {
+          reason = `Indisponibilidade: ${teacher.name} não trabalha na ${dayLabel}.`;
+        }
+        const slotHour = parseInt(slot.start_time.split(':')[0] || '0', 10);
+        const slotShift = slotHour >= 12 ? 'vespertino' : 'matutino';
+        if (teacher.availability_shift && teacher.availability_shift !== 'ambos' && teacher.availability_shift !== slotShift) {
+          const shiftReason = `Indisponibilidade: ${teacher.name} trabalha apenas no turno ${teacher.availability_shift} (esta aula é no ${slotShift}).`;
+          reason = reason ? `${reason} | ${shiftReason}` : shiftReason;
+        }
+      }
+
+      if (conflictingSlots.length > 0) {
+        const conflictingClassIds = Array.from(new Set(conflictingSlots.map(s => s.class_id)));
+        const conflictingClasses = conflictingClassIds.map(cid => classes.find(c => c.id === cid)?.name || 'Outra Turma');
+        const conflictReason = `Choque de Horário: Professor já alocado na(s) turma(s) ${conflictingClasses.join(', ')} neste horário.`;
+        list.push(`[${classes.find(c => c.id === slot.class_id)?.name || 'Turma'}] ${reason ? `${conflictReason} | ${reason}` : conflictReason}`);
+      } else if (reason) {
+        list.push(`[${classes.find(c => c.id === slot.class_id)?.name || 'Turma'}] ${reason}`);
+      }
+    });
+    return Array.from(new Set(list));
+  };
+
+  // Filter classes for Matrix Grid View
+  const filteredMatrixClasses = useMemo(() => {
+    return classes.filter(cls => {
+      const shift = getClassShift(cls);
+      if (shift !== matrixShift) return false;
+      if (matrixGroup !== 'todos') {
+        if (cls.group !== matrixGroup) return false;
+      }
+      return true;
+    }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  }, [classes, matrixShift, matrixGroup]);
+
+  // Generate Matrix time blocks / periods
+  const matrixBlocks = useMemo(() => {
+    const defaultMorning = [
+      { label: '1º', start_time: '07:15', end_time: '08:05', is_interval: false },
+      { label: '2º', start_time: '08:05', end_time: '08:55', is_interval: false },
+      { label: 'RECREIO', start_time: '08:55', end_time: '09:10', is_interval: true },
+      { label: '3º', start_time: '09:10', end_time: '10:00', is_interval: false },
+      { label: '4º', start_time: '10:00', end_time: '10:50', is_interval: false },
+      { label: '5º', start_time: '10:50', end_time: '11:40', is_interval: false },
+      { label: '6º', start_time: '11:40', end_time: '12:30', is_interval: false }
+    ];
+
+    const defaultAfternoon = [
+      { label: '1º', start_time: '13:30', end_time: '14:20', is_interval: false },
+      { label: '2º', start_time: '14:20', end_time: '15:10', is_interval: false },
+      { label: '3º', start_time: '15:10', end_time: '16:00', is_interval: false },
+      { label: 'RECREIO', start_time: '16:00', end_time: '16:20', is_interval: true },
+      { label: '4º', start_time: '16:20', end_time: '17:10', is_interval: false },
+      { label: '5º', start_time: '17:10', end_time: '18:00', is_interval: false },
+      { label: '6º', start_time: '18:00', end_time: '18:50', is_interval: false }
+    ];
+
+    if (matrixShift === 'vespertino') return defaultAfternoon;
+    return defaultMorning;
+  }, [matrixShift]);
+
+  // Handle Drag & Drop inside Matrix View across classes and days
+  const handleMatrixDrop = async (
+    e: React.DragEvent,
+    targetClassId: string,
+    targetDay: DayOfWeek,
+    targetStartTime: string,
+    targetEndTime: string
+  ) => {
+    if (!isAdmin) return;
+    e.preventDefault();
+    setDraggedMatrixCell(null);
+
+    try {
+      let draggedSlot: ScheduleSlot | null = null;
+      const rawData = e.dataTransfer.getData('application/json');
+      if (rawData) {
+        try {
+          draggedSlot = JSON.parse(rawData) as ScheduleSlot;
+        } catch (err) {
+          console.warn('Error parsing JSON drag data:', err);
+        }
+      }
+      if (!draggedSlot) {
+        draggedSlot = draggedSlotState;
+      }
+      if (!draggedSlot) return;
+
+      const targetSlot = scheduleSlots.find(
+        s => s.class_id === targetClassId &&
+        s.day_of_week === targetDay &&
+        s.start_time === targetStartTime &&
+        s.end_time === targetEndTime
+      );
+
+      let updatedSlots = [...scheduleSlots];
+
+      if (targetSlot) {
+        if (targetSlot.id === draggedSlot.id) return;
+        // SWAP both slots
+        updatedSlots = updatedSlots.map(s => {
+          if (s.id === draggedSlot!.id) {
+            return {
+              ...s,
+              class_id: targetClassId,
+              day_of_week: targetDay,
+              start_time: targetStartTime,
+              end_time: targetEndTime
+            };
+          }
+          if (s.id === targetSlot.id) {
+            return {
+              ...s,
+              class_id: draggedSlot!.class_id,
+              day_of_week: draggedSlot!.day_of_week,
+              start_time: draggedSlot!.start_time,
+              end_time: draggedSlot!.end_time
+            };
+          }
+          return s;
+        });
+      } else {
+        // MOVE slot to target cell
+        updatedSlots = updatedSlots.map(s => {
+          if (s.id === draggedSlot!.id) {
+            return {
+              ...s,
+              class_id: targetClassId,
+              day_of_week: targetDay,
+              start_time: targetStartTime,
+              end_time: targetEndTime
+            };
+          }
+          return s;
+        });
+      }
+
+      const newConflicts = checkConflictsForList(updatedSlots);
+      setScheduleSlots(updatedSlots);
+      await storage.saveScheduleSlots(updatedSlots);
+
+      const targetClassName = classes.find(c => c.id === targetClassId)?.name || 'Turma';
+
+      if (newConflicts.length > 0) {
+        setScheduleStatus({
+          message: `⚠️ Horário alterado na turma ${targetClassName}, mas gerou conflito!`,
+          type: 'warning',
+          details: newConflicts
+        });
+      } else {
+        setScheduleStatus({
+          message: targetSlot 
+            ? `🔄 Horários trocados com sucesso na matriz!`
+            : `📍 Horário movido com sucesso para ${targetClassName}!`,
+          type: 'success',
+          details: [`A alteração foi salva com sucesso.`]
+        });
+      }
+    } catch (err) {
+      console.error('Error during matrix drag drop:', err);
+    }
+  };
+
+  const openMatrixCellEdit = (
+    classId: string,
+    day: DayOfWeek,
+    startTime: string,
+    endTime: string,
+    existingSlot?: ScheduleSlot
+  ) => {
+    if (!isAdmin) return;
+    setMatrixCellTeacherId(existingSlot?.teacher_id || '');
+    setMatrixCellSubject(existingSlot?.subject || '');
+    setEditingMatrixCell({ classId, day, startTime, endTime });
+  };
+
+  const saveMatrixCell = async () => {
+    if (!editingMatrixCell) return;
+    const { classId, day, startTime, endTime } = editingMatrixCell;
+
+    let updatedSlots = [...scheduleSlots];
+    if (!matrixCellTeacherId || !matrixCellSubject) {
+      // Clear slot
+      updatedSlots = updatedSlots.filter(
+        s => !(s.class_id === classId && s.day_of_week === day && s.start_time === startTime && s.end_time === endTime)
+      );
+    } else {
+      const filtered = updatedSlots.filter(
+        s => !(s.class_id === classId && s.day_of_week === day && s.start_time === startTime && s.end_time === endTime)
+      );
+      filtered.push({
+        id: crypto.randomUUID(),
+        class_id: classId,
+        teacher_id: matrixCellTeacherId,
+        subject: matrixCellSubject,
+        day_of_week: day,
+        start_time: startTime,
+        end_time: endTime
+      });
+      updatedSlots = filtered;
+    }
+
+    const newConflicts = checkConflictsForList(updatedSlots);
+    setScheduleSlots(updatedSlots);
+    await storage.saveScheduleSlots(updatedSlots);
+    setEditingMatrixCell(null);
+
+    if (newConflicts.length > 0) {
+      setScheduleStatus({
+        message: `⚠️ Grade atualizada, mas gerou conflito!`,
+        type: 'warning',
+        details: newConflicts
+      });
+    } else {
+      setScheduleStatus({
+        message: `✅ Grade de aulas atualizada com sucesso!`,
+        type: 'success'
+      });
     }
   };
 
@@ -3004,213 +3271,510 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
-        <select
-          className="px-4 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 font-bold text-slate-700 min-w-[250px]"
-          value={selectedClassId}
-          onChange={(e) => setSelectedClassId(e.target.value)}
-        >
-          <option value="">Selecione uma Turma</option>
-          {(['infantil', 'anos_iniciais', 'anos_finais', 'ensino_medio'] as EducationalGroup[]).map(group => {
-            const groupClasses = classes.filter(c => c.group === group);
-            if (groupClasses.length === 0) return null;
-            return (
-              <optgroup key={group} label={groupLabels[group]}>
-                {groupClasses.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </optgroup>
-            );
-          })}
-        </select>
+      {/* VIEW SELECTION & CONTROL BAR */}
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
+          <button
+            onClick={() => setViewMode('matrix')}
+            className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
+              viewMode === 'matrix'
+                ? 'bg-red-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <span>📊 Visão Geral (Matriz)</span>
+          </button>
+          <button
+            onClick={() => setViewMode('single')}
+            className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
+              viewMode === 'single'
+                ? 'bg-red-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <span>🏫 Visão Por Turma</span>
+          </button>
+        </div>
+
+        {viewMode === 'matrix' ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+              <button
+                onClick={() => setMatrixShift('matutino')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  matrixShift === 'matutino' ? 'bg-amber-500 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                ☀️ Matutino (A)
+              </button>
+              <button
+                onClick={() => setMatrixShift('vespertino')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  matrixShift === 'vespertino' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                🌙 Vespertino (B)
+              </button>
+            </div>
+
+            <select
+              value={matrixGroup}
+              onChange={(e) => setMatrixGroup(e.target.value)}
+              className="px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-red-500"
+            >
+              <option value="todos">Todos os Segmentos</option>
+              <option value="anos_finais">6º ao 9º Ano (Anos Finais)</option>
+              <option value="ensino_medio">Ensino Médio</option>
+              <option value="anos_iniciais">Anos Iniciais</option>
+              <option value="infantil">Educação Infantil</option>
+            </select>
+          </div>
+        ) : (
+          <select
+            className="px-4 py-2 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 font-bold text-slate-700 min-w-[250px] text-xs"
+            value={selectedClassId}
+            onChange={(e) => setSelectedClassId(e.target.value)}
+          >
+            <option value="">Selecione uma Turma...</option>
+            {(['infantil', 'anos_iniciais', 'anos_finais', 'ensino_medio'] as EducationalGroup[]).map(group => {
+              const groupClasses = classes.filter(c => c.group === group);
+              if (groupClasses.length === 0) return null;
+              return (
+                <optgroup key={group} label={groupLabels[group]}>
+                  {groupClasses.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </optgroup>
+              );
+            })}
+          </select>
+        )}
 
         <div className="flex items-center space-x-2">
           {isAdmin && (
             <button 
               onClick={() => setIsAutoModalOpen(true)} 
-              className="flex items-center space-x-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold transition-colors"
+              className="flex items-center space-x-1.5 bg-red-600 hover:bg-red-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shadow-xs"
             >
-              <Wand2 className="w-4 h-4" />
-              <span>Organizar Automaticamente</span>
+              <Wand2 className="w-3.5 h-3.5" />
+              <span>Organizar Automático</span>
             </button>
           )}
 
           <button 
             onClick={() => setIsExportModalOpen(true)} 
-            className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg font-bold transition-colors"
+            className="flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shadow-xs"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-3.5 h-3.5" />
             <span>Exportar PDF</span>
           </button>
         </div>
       </div>
 
-      {selectedClassId ? (
-        <div className="space-y-6">
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+      {/* MATRIX VIEW GRID */}
+      {viewMode === 'matrix' && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl border-2 border-slate-800 overflow-hidden shadow-md">
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm border-collapse min-w-[800px]">
-                <thead className="bg-slate-50 border-b border-slate-200">
-                  <tr>
-                    <th className="px-4 py-3 font-bold text-slate-700 w-[180px] border-r border-slate-200">Horários</th>
-                    {['segunda', 'terca', 'quarta', 'quinta', 'sexta'].map(day => (
-                      <th key={day} className="px-4 py-3 font-bold text-slate-700 text-center capitalize border-r border-slate-200 last:border-r-0 w-[150px]">
-                        {day === 'terca' ? 'Terça' : day}
+              <table className="w-full border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-800 text-white border-b-2 border-slate-900">
+                    <th className="p-2.5 font-extrabold uppercase text-center border-r-2 border-slate-700 w-[90px]">
+                      DIA
+                    </th>
+                    <th className="p-2.5 font-extrabold uppercase text-center border-r-2 border-slate-700 w-[110px]">
+                      HORÁRIO
+                    </th>
+                    {filteredMatrixClasses.map(cls => (
+                      <th key={cls.id} className="p-2.5 font-black uppercase text-center border-r-2 border-slate-700 last:border-r-0 min-w-[145px] text-xs tracking-wide bg-slate-800">
+                        {cls.name.toUpperCase()}
                       </th>
                     ))}
+                    {filteredMatrixClasses.length === 0 && (
+                      <th className="p-2.5 font-bold text-center">Nenhuma turma encontrada</th>
+                    )}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {classTimeBlocks.map((block) => (
-                    <tr key={block.id} className="group">
-                      <td className="px-4 py-3 border-r border-slate-200 bg-slate-50/50 relative">
-                        {isAdmin ? (
-                          <div className="flex flex-col space-y-2">
-                            <div className="flex items-center space-x-1">
-                              <input type="time" className="w-[70px] text-xs px-1 py-1 border rounded bg-white text-slate-700" value={block.start_time} onChange={e => updateTimeBlock(block.id, 'start_time', e.target.value)} />
-                              <span className="text-slate-400 text-xs">-</span>
-                              <input type="time" className="w-[70px] text-xs px-1 py-1 border rounded bg-white text-slate-700" value={block.end_time} onChange={e => updateTimeBlock(block.id, 'end_time', e.target.value)} />
-                            </div>
-                            <button onClick={() => removeTimeBlock(block.id)} className="text-[10px] text-red-500 hover:text-red-700 font-bold self-start flex items-center">
-                              <Trash2 className="w-3 h-3 mr-1" /> Remover
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="font-bold text-slate-700 text-center">{block.start_time} - {block.end_time}</div>
-                        )}
-                      </td>
-                      {block.is_interval ? (
-                        <td colSpan={5} className="bg-amber-50/30 border-r border-slate-200 p-4 align-middle text-center">
-                          <div className="flex items-center justify-center space-x-2 text-amber-800 font-bold tracking-wider text-xs">
-                            <span className="text-sm">☕</span>
-                            <span className="font-serif-editorial">INTERVALO / RECREIO</span>
-                          </div>
-                        </td>
-                      ) : (
-                        (['segunda', 'terca', 'quarta', 'quinta', 'sexta'] as DayOfWeek[]).map(day => {
-                          const existingSlot = scheduleSlots.find(s => s.class_id === selectedClassId && s.day_of_week === day && s.start_time === block.start_time && s.end_time === block.end_time);
-                          const isEditing = editingCell?.day === day && editingCell?.blockId === block.id;
-                          
-                          const selectedClass = classes.find(c => c.id === selectedClassId);
-                          const availableTeachers = teachers.filter(t => selectedClass && t.groups?.includes(selectedClass.group));
-
-                          const isClass678 = selectedClass ? is678Grade(selectedClass.name) : false;
-                          const nonIntervalBlocks = classTimeBlocks.filter(b => !b.is_interval).sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
-                          const nonIntervalIdx = nonIntervalBlocks.findIndex(b => b.id === block.id);
-                          const is6thSlot = nonIntervalIdx >= 5;
-                          const isRestrictedDay = day === 'segunda' || day === 'quarta' || day === 'sexta';
-                          const isRestricted6thSlot = isClass678 && isRestrictedDay && is6thSlot && !existingSlot; const isDraggedOver = draggedOverCell?.day === day && draggedOverCell?.blockId === block.id;
-
-                          return (
-                            <td key={day} onDragOver={(e) => handleDragOver(e, day, block)} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, day, block)} className={`border-r border-slate-200 last:border-r-0 p-2 align-top relative transition-all ${isDraggedOver ? 'bg-red-50 ring-2 ring-red-500 ring-dashed' : ''} ${isAdmin ? 'hover:bg-slate-50 cursor-pointer' : ''}`} onClick={() => !isEditing && openCellEdit(block, day, existingSlot)}>
-                              {isEditing ? (
-                                <div className="flex flex-col space-y-2 bg-white p-2 rounded-lg shadow-sm border border-slate-200" onClick={e => e.stopPropagation()}>
-                                  <select 
-                                    className="text-xs px-2 py-1.5 border rounded w-full"
-                                    value={cellTeacherId}
-                                    onChange={e => {
-                                      setCellTeacherId(e.target.value);
-                                      setCellSubject('');
-                                    }}
-                                  >
-                                    <option value="">Professor...</option>
-                                    {availableTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                                  </select>
-                                  <select 
-                                    className="text-xs px-2 py-1.5 border rounded w-full"
-                                    value={cellSubject}
-                                    onChange={e => setCellSubject(e.target.value)}
-                                    disabled={!cellTeacherId}
-                                  >
-                                    <option value="">Disciplina...</option>
-                                    {teachers.find(t => t.id === cellTeacherId)?.subjects.map(s => <option key={s} value={s}>{s}</option>)}
-                                  </select>
-                                  <div className="flex space-x-1 pt-1">
-                                    <button onClick={() => saveCell(block, day)} className="flex-1 bg-red-600 text-white text-[10px] font-bold py-1 rounded">Salvar</button>
-                                    <button onClick={() => setEditingCell(null)} className="flex-1 bg-slate-100 text-slate-600 text-[10px] font-bold py-1 rounded">Cancelar</button>
-                                  </div>
-                                </div>
-                              ) : existingSlot ? (() => {
-                                const conflict = checkSlotConflict(existingSlot);
-                                return (
-                                  <div draggable={isAdmin} onDragStart={(e) => handleDragStart(e, existingSlot)} onDragEnd={handleDragEnd} className={`flex flex-col items-center justify-center h-full min-h-[60px] p-2 rounded-lg border transition-all ${isAdmin ? 'cursor-grab active:cursor-grabbing hover:brightness-95' : ''} ${conflict.isConflict ? 'bg-red-100 border-red-500 text-red-950 shadow-md ring-2 ring-red-400 animate-pulse' : 'bg-emerald-50/60 border-emerald-200 text-slate-800'}`}>
-                                    {conflict.isConflict && (
-                                      <span title={conflict.reason} className="text-[9px] font-bold uppercase tracking-wider text-red-700 bg-red-200 px-1.5 py-0.5 rounded mb-0.5 flex items-center gap-0.5 cursor-help">
-                                        ⚠️ Conflito
-                                      </span>
-                                    )}
-                                    <span className="font-bold text-xs text-center">{existingSlot.subject}</span>
-                                    <span className="text-[10px] opacity-80 text-center">{teachers.find(t => t.id === existingSlot.teacher_id)?.name || 'S/ Prof'}</span>
-                                    {conflict.isConflict && conflict.reason && (
-                                      <span className="text-[8px] text-red-700 font-semibold text-center leading-tight mt-1 bg-white/80 border border-red-200 px-1 py-0.5 rounded">
-                                        {conflict.reason}
-                                      </span>
-                                    )}
-                                  </div>
-                                );
-                              })() : isRestricted6thSlot ? (
-                                <div className="flex flex-col items-center justify-center h-full min-h-[60px] p-2 bg-slate-100/60 rounded-lg border border-dashed border-slate-200">
-                                  <span className="text-[11px] font-medium text-slate-400 text-center">Sem 6º Horário</span>
-                                  <span className="text-[9px] text-slate-400 text-center">(Apenas Ter/Qui)</span>
-                                </div>
-                              ) : (
-                                <div className="flex flex-col items-center justify-center h-full min-h-[60px] p-2 bg-amber-50/50 hover:bg-amber-100/60 rounded-lg border border-dashed border-amber-300 transition-colors">
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded mb-1 flex items-center gap-0.5">
-                                    ⚠️ Horário Vago
-                                  </span>
-                                  <span className="text-[10px] text-amber-800 font-medium text-center leading-tight">
-                                    Alunos livres!
-                                  </span>
-                                </div>
-                              )}
-                            </td>
-                          );
-                        })
-                      )}
-                    </tr>
-                  ))}
-                  {classTimeBlocks.length === 0 && (
+                <tbody>
+                  {filteredMatrixClasses.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
-                        Nenhum horário definido para esta turma.
+                      <td colSpan={3} className="p-8 text-center text-slate-500 font-medium italic">
+                        Nenhuma turma encontrada para o turno e segmento selecionados.
                       </td>
                     </tr>
+                  ) : (
+                    (['segunda', 'terca', 'quarta', 'quinta', 'sexta'] as DayOfWeek[]).map((dayKey, dayIdx) => {
+                      const dayLabels: Record<DayOfWeek, string> = {
+                        segunda: 'SEGUNDA',
+                        terca: 'TERÇA',
+                        quarta: 'QUARTA',
+                        quinta: 'QUINTA',
+                        sexta: 'SEXTA',
+                        sabado: 'SÁBADO'
+                      };
+                      const isShadedDay = dayIdx % 2 === 1;
+
+                      return matrixBlocks.map((block, blockIdx) => {
+                        const isFirstRowOfDay = blockIdx === 0;
+
+                        return (
+                          <tr
+                            key={`${dayKey}-${block.start_time}-${block.end_time}`}
+                            className={`border-b border-slate-400 ${
+                              isShadedDay ? 'bg-slate-200/60' : 'bg-white'
+                            } hover:bg-amber-50/40 transition-colors`}
+                          >
+                            {isFirstRowOfDay && (
+                              <td
+                                rowSpan={matrixBlocks.length}
+                                className="p-2 font-black text-slate-900 text-center uppercase tracking-wider text-xs border-r-2 border-slate-800 border-b-2 border-slate-800 bg-slate-300/80 align-middle select-none"
+                              >
+                                <div className="font-bold text-slate-900 text-xs">
+                                  {dayLabels[dayKey]}
+                                </div>
+                              </td>
+                            )}
+
+                            <td className="p-1.5 font-extrabold text-slate-800 text-center border-r-2 border-slate-700 whitespace-nowrap bg-slate-100/90 text-[11px]">
+                              <div>{block.label}</div>
+                              <div className="text-[9px] font-normal text-slate-600">
+                                {block.start_time} - {block.end_time}
+                              </div>
+                            </td>
+
+                            {filteredMatrixClasses.map(cls => {
+                              if (block.is_interval) {
+                                return (
+                                  <td
+                                    key={cls.id}
+                                    className="p-1 border-r border-slate-400 text-center bg-slate-300/40 font-bold text-[10px] text-slate-600 uppercase select-none"
+                                  >
+                                    ☕ RECREIO
+                                  </td>
+                                );
+                              }
+
+                              const slot = scheduleSlots.find(
+                                s => s.class_id === cls.id &&
+                                s.day_of_week === dayKey &&
+                                s.start_time === block.start_time &&
+                                s.end_time === block.end_time
+                              );
+
+                              const conflict = slot ? checkSlotConflict(slot) : null;
+                              const isDraggedOver = draggedMatrixCell?.classId === cls.id &&
+                                draggedMatrixCell?.day === dayKey &&
+                                draggedMatrixCell?.startTime === block.start_time &&
+                                draggedMatrixCell?.endTime === block.end_time;
+
+                              return (
+                                <td
+                                  key={cls.id}
+                                  onDragOver={(e) => {
+                                    if (!isAdmin) return;
+                                    e.preventDefault();
+                                    if (!isDraggedOver) {
+                                      setDraggedMatrixCell({ classId: cls.id, day: dayKey, startTime: block.start_time, endTime: block.end_time });
+                                    }
+                                  }}
+                                  onDragLeave={() => setDraggedMatrixCell(null)}
+                                  onDrop={(e) => handleMatrixDrop(e, cls.id, dayKey, block.start_time, block.end_time)}
+                                  onClick={() => openMatrixCellEdit(cls.id, dayKey, block.start_time, block.end_time, slot)}
+                                  className={`p-1.5 border-r border-slate-400 align-middle text-center relative transition-all min-w-[135px] h-[58px] ${
+                                    isDraggedOver ? 'bg-red-100 ring-2 ring-red-600' : ''
+                                  } ${isAdmin ? 'hover:bg-amber-100/50 cursor-pointer' : ''}`}
+                                >
+                                  {slot ? (
+                                    <div
+                                      draggable={isAdmin}
+                                      onDragStart={(e) => handleDragStart(e, slot)}
+                                      onDragEnd={handleDragEnd}
+                                      className={`flex flex-col justify-center items-center p-1 rounded-md border transition-all h-full ${
+                                        isAdmin ? 'cursor-grab active:cursor-grabbing hover:brightness-95 shadow-2xs' : ''
+                                      } ${
+                                        conflict?.isConflict
+                                          ? 'bg-rose-100 border-rose-500 text-rose-950 ring-1 ring-rose-400 animate-pulse'
+                                          : 'bg-emerald-50 border-emerald-300 text-slate-900 shadow-2xs'
+                                      }`}
+                                    >
+                                      {conflict?.isConflict && (
+                                        <span title={conflict.reason} className="text-[8px] font-black uppercase text-rose-700 bg-rose-200 px-1 rounded mb-0.5">
+                                          ⚠️ CONFLITO
+                                        </span>
+                                      )}
+                                      <span className="font-extrabold text-xs text-slate-900 leading-tight">
+                                        {slot.subject}
+                                      </span>
+                                      <span className="text-[10px] font-medium text-slate-600 truncate max-w-[125px]">
+                                        {teachers.find(t => t.id === slot.teacher_id)?.name || 'S/ Prof'}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-col items-center justify-center h-full border border-dashed border-slate-300 rounded-md bg-white/50 text-slate-400 hover:text-slate-600 hover:border-slate-400 hover:bg-white transition-all p-1">
+                                      <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                        + Adicionar
+                                      </span>
+                                    </div>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      });
+                    })
                   )}
                 </tbody>
               </table>
             </div>
           </div>
-          
-          {isAdmin && (
-            <div className="flex flex-wrap gap-3 pt-2">
-              <button 
-                onClick={() => handleAddTimeBlock(false)}
-                className="flex items-center space-x-2 text-red-600 hover:text-red-700 font-bold text-xs bg-red-50 hover:bg-red-100 px-3.5 py-2 rounded-xl transition-colors border border-red-100"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Adicionar Horário Aula</span>
-              </button>
-              <button 
-                onClick={() => handleAddTimeBlock(true)}
-                className="flex items-center space-x-2 text-amber-700 hover:text-amber-800 font-bold text-xs bg-amber-50 hover:bg-amber-100 px-3.5 py-2 rounded-xl transition-colors border border-amber-100"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Adicionar Intervalo / Recreio</span>
-              </button>
-              <button 
-                onClick={handleResetDefaultBlocks}
-                className="flex items-center space-x-2 text-slate-600 hover:text-slate-800 font-bold text-xs bg-slate-50 hover:bg-slate-100 px-3.5 py-2 rounded-xl transition-colors border border-slate-200 ml-auto"
-              >
-                <span>Resetar para Grade Padrão</span>
-              </button>
+
+          {/* MATRIX CELL EDIT MODAL */}
+          {editingMatrixCell && (
+            <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in duration-150">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <div>
+                    <h4 className="font-bold text-slate-800 text-sm">
+                      Editar Aulas - {classes.find(c => c.id === editingMatrixCell.classId)?.name}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 capitalize">
+                      {editingMatrixCell.day === 'terca' ? 'Terça' : editingMatrixCell.day} | {editingMatrixCell.startTime} - {editingMatrixCell.endTime}
+                    </p>
+                  </div>
+                  <button onClick={() => setEditingMatrixCell(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Professor</label>
+                    <select
+                      className="w-full text-xs px-3 py-2 border border-slate-300 rounded-xl bg-white font-medium text-slate-800"
+                      value={matrixCellTeacherId}
+                      onChange={e => {
+                        setMatrixCellTeacherId(e.target.value);
+                        setMatrixCellSubject('');
+                      }}
+                    >
+                      <option value="">Nenhum / Horário Vago</option>
+                      {teachers
+                        .filter(t => {
+                          const cls = classes.find(c => c.id === editingMatrixCell.classId);
+                          return cls && t.groups?.includes(cls.group);
+                        })
+                        .map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Disciplina</label>
+                    <select
+                      className="w-full text-xs px-3 py-2 border border-slate-300 rounded-xl bg-white font-medium text-slate-800 disabled:opacity-50"
+                      value={matrixCellSubject}
+                      onChange={e => setMatrixCellSubject(e.target.value)}
+                      disabled={!matrixCellTeacherId}
+                    >
+                      <option value="">Selecione a disciplina...</option>
+                      {teachers.find(t => t.id === matrixCellTeacherId)?.subjects.map(s => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2 pt-2 border-t border-slate-100">
+                  <button
+                    onClick={saveMatrixCell}
+                    className="flex-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold py-2 rounded-xl transition-all shadow-xs"
+                  >
+                    Salvar Célula
+                  </button>
+                  <button
+                    onClick={() => setEditingMatrixCell(null)}
+                    className="px-4 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold py-2 rounded-xl transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
-      ) : (
-        <div className="flex flex-col items-center justify-center py-16 text-slate-400">
-          <CalendarClock className="w-16 h-16 mb-4 opacity-20" />
-          <p className="font-medium text-lg text-slate-500">Selecione uma turma para visualizar a grade.</p>
-        </div>
+      )}
+
+      {/* SINGLE CLASS VIEW */}
+      {viewMode === 'single' && (
+        selectedClassId ? (
+          <div className="space-y-6">
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm border-collapse min-w-[800px]">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="px-4 py-3 font-bold text-slate-700 w-[180px] border-r border-slate-200">Horários</th>
+                      {['segunda', 'terca', 'quarta', 'quinta', 'sexta'].map(day => (
+                        <th key={day} className="px-4 py-3 font-bold text-slate-700 text-center capitalize border-r border-slate-200 last:border-r-0 w-[150px]">
+                          {day === 'terca' ? 'Terça' : day}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {classTimeBlocks.map((block) => (
+                      <tr key={block.id} className="group">
+                        <td className="px-4 py-3 border-r border-slate-200 bg-slate-50/50 relative">
+                          {isAdmin ? (
+                            <div className="flex flex-col space-y-2">
+                              <div className="flex items-center space-x-1">
+                                <input type="time" className="w-[70px] text-xs px-1 py-1 border rounded bg-white text-slate-700" value={block.start_time} onChange={e => updateTimeBlock(block.id, 'start_time', e.target.value)} />
+                                <span className="text-slate-400 text-xs">-</span>
+                                <input type="time" className="w-[70px] text-xs px-1 py-1 border rounded bg-white text-slate-700" value={block.end_time} onChange={e => updateTimeBlock(block.id, 'end_time', e.target.value)} />
+                              </div>
+                              <button onClick={() => removeTimeBlock(block.id)} className="text-[10px] text-red-500 hover:text-red-700 font-bold self-start flex items-center">
+                                <Trash2 className="w-3 h-3 mr-1" /> Remover
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="font-bold text-slate-700 text-center">{block.start_time} - {block.end_time}</div>
+                          )}
+                        </td>
+                        {block.is_interval ? (
+                          <td colSpan={5} className="bg-amber-50/30 border-r border-slate-200 p-4 align-middle text-center">
+                            <div className="flex items-center justify-center space-x-2 text-amber-800 font-bold tracking-wider text-xs">
+                              <span className="text-sm">☕</span>
+                              <span className="font-serif-editorial">INTERVALO / RECREIO</span>
+                            </div>
+                          </td>
+                        ) : (
+                          (['segunda', 'terca', 'quarta', 'quinta', 'sexta'] as DayOfWeek[]).map(day => {
+                            const existingSlot = scheduleSlots.find(s => s.class_id === selectedClassId && s.day_of_week === day && s.start_time === block.start_time && s.end_time === block.end_time);
+                            const isEditing = editingCell?.day === day && editingCell?.blockId === block.id;
+                            
+                            const selectedClass = classes.find(c => c.id === selectedClassId);
+                            const availableTeachers = teachers.filter(t => selectedClass && t.groups?.includes(selectedClass.group));
+
+                            const isClass678 = selectedClass ? is678Grade(selectedClass.name) : false;
+                            const nonIntervalBlocks = classTimeBlocks.filter(b => !b.is_interval).sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+                            const nonIntervalIdx = nonIntervalBlocks.findIndex(b => b.id === block.id);
+                            const is6thSlot = nonIntervalIdx >= 5;
+                            const isRestrictedDay = day === 'segunda' || day === 'quarta' || day === 'sexta';
+                            const isRestricted6thSlot = isClass678 && isRestrictedDay && is6thSlot && !existingSlot; const isDraggedOver = draggedOverCell?.day === day && draggedOverCell?.blockId === block.id;
+
+                            return (
+                              <td key={day} onDragOver={(e) => handleDragOver(e, day, block)} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, day, block)} className={`border-r border-slate-200 last:border-r-0 p-2 align-top relative transition-all ${isDraggedOver ? 'bg-red-50 ring-2 ring-red-500 ring-dashed' : ''} ${isAdmin ? 'hover:bg-slate-50 cursor-pointer' : ''}`} onClick={() => !isEditing && openCellEdit(block, day, existingSlot)}>
+                                {isEditing ? (
+                                  <div className="flex flex-col space-y-2 bg-white p-2 rounded-lg shadow-sm border border-slate-200" onClick={e => e.stopPropagation()}>
+                                    <select 
+                                      className="text-xs px-2 py-1.5 border rounded w-full"
+                                      value={cellTeacherId}
+                                      onChange={e => {
+                                        setCellTeacherId(e.target.value);
+                                        setCellSubject('');
+                                      }}
+                                    >
+                                      <option value="">Professor...</option>
+                                      {availableTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                    </select>
+                                    <select 
+                                      className="text-xs px-2 py-1.5 border rounded w-full"
+                                      value={cellSubject}
+                                      onChange={e => setCellSubject(e.target.value)}
+                                      disabled={!cellTeacherId}
+                                    >
+                                      <option value="">Disciplina...</option>
+                                      {teachers.find(t => t.id === cellTeacherId)?.subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                                    </select>
+                                    <div className="flex space-x-1 pt-1">
+                                      <button onClick={() => saveCell(block, day)} className="flex-1 bg-red-600 text-white text-[10px] font-bold py-1 rounded">Salvar</button>
+                                      <button onClick={() => setEditingCell(null)} className="flex-1 bg-slate-100 text-slate-600 text-[10px] font-bold py-1 rounded">Cancelar</button>
+                                    </div>
+                                  </div>
+                                ) : existingSlot ? (() => {
+                                  const conflict = checkSlotConflict(existingSlot);
+                                  return (
+                                    <div draggable={isAdmin} onDragStart={(e) => handleDragStart(e, existingSlot)} onDragEnd={handleDragEnd} className={`flex flex-col items-center justify-center h-full min-h-[60px] p-2 rounded-lg border transition-all ${isAdmin ? 'cursor-grab active:cursor-grabbing hover:brightness-95' : ''} ${conflict.isConflict ? 'bg-red-100 border-red-500 text-red-950 shadow-md ring-2 ring-red-400 animate-pulse' : 'bg-emerald-50/60 border-emerald-200 text-slate-800'}`}>
+                                      {conflict.isConflict && (
+                                        <span title={conflict.reason} className="text-[9px] font-bold uppercase tracking-wider text-red-700 bg-red-200 px-1.5 py-0.5 rounded mb-0.5 flex items-center gap-0.5 cursor-help">
+                                          ⚠️ Conflito
+                                        </span>
+                                      )}
+                                      <span className="font-bold text-xs text-center">{existingSlot.subject}</span>
+                                      <span className="text-[10px] opacity-80 text-center">{teachers.find(t => t.id === existingSlot.teacher_id)?.name || 'S/ Prof'}</span>
+                                      {conflict.isConflict && conflict.reason && (
+                                        <span className="text-[8px] text-red-700 font-semibold text-center leading-tight mt-1 bg-white/80 border border-red-200 px-1 py-0.5 rounded">
+                                          {conflict.reason}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })() : isRestricted6thSlot ? (
+                                  <div className="flex flex-col items-center justify-center h-full min-h-[60px] p-2 bg-slate-100/60 rounded-lg border border-dashed border-slate-200">
+                                    <span className="text-[11px] font-medium text-slate-400 text-center">Sem 6º Horário</span>
+                                    <span className="text-[9px] text-slate-400 text-center">(Apenas Ter/Qui)</span>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-col items-center justify-center h-full min-h-[60px] p-2 bg-amber-50/50 hover:bg-amber-100/60 rounded-lg border border-dashed border-amber-300 transition-colors">
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded mb-1 flex items-center gap-0.5">
+                                      ⚠️ Horário Vago
+                                    </span>
+                                    <span className="text-[10px] text-amber-800 font-medium text-center leading-tight">
+                                      Alunos livres!
+                                    </span>
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          })
+                        )}
+                      </tr>
+                    ))}
+                    {classTimeBlocks.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                          Nenhum horário definido para esta turma.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            {isAdmin && (
+              <div className="flex flex-wrap gap-3 pt-2">
+                <button 
+                  onClick={() => handleAddTimeBlock(false)}
+                  className="flex items-center space-x-2 text-red-600 hover:text-red-700 font-bold text-xs bg-red-50 hover:bg-red-100 px-3.5 py-2 rounded-xl transition-colors border border-red-100"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Adicionar Horário Aula</span>
+                </button>
+                <button 
+                  onClick={() => handleAddTimeBlock(true)}
+                  className="flex items-center space-x-2 text-amber-700 hover:text-amber-800 font-bold text-xs bg-amber-50 hover:bg-amber-100 px-3.5 py-2 rounded-xl transition-colors border border-amber-100"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Adicionar Intervalo / Recreio</span>
+                </button>
+                <button 
+                  onClick={handleResetDefaultBlocks}
+                  className="flex items-center space-x-2 text-slate-600 hover:text-slate-800 font-bold text-xs bg-slate-50 hover:bg-slate-100 px-3.5 py-2 rounded-xl transition-colors border border-slate-200 ml-auto"
+                >
+                  <span>Resetar para Grade Padrão</span>
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-16 text-slate-400 bg-white rounded-2xl border border-slate-200">
+            <CalendarClock className="w-16 h-16 mb-4 opacity-20" />
+            <p className="font-medium text-lg text-slate-500">Selecione uma turma para visualizar a grade individual.</p>
+          </div>
+        )
       )}
     </div>
   );
