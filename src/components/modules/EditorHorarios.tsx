@@ -1885,14 +1885,174 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         list.push(`[${classes.find(c => c.id === slot.class_id)?.name || 'Turma'}] ${excessReason}`);
       }
     });
+
+    // Check for non-consecutive double lessons (2 aulas da mesma matéria no mesmo dia que não estão coladas/seguidas)
+    const normSub = (s: string) => (s || '').trim().toUpperCase();
+    const daysList: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+
+    classes.forEach(cls => {
+      const clsBlocks = timeBlocks
+        .filter(b => b.class_id === cls.id && !b.is_interval)
+        .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
+      daysList.forEach(day => {
+        const subjectSlotsMap: Record<string, ScheduleSlot[]> = {};
+        slots.forEach(s => {
+          if (s.class_id === cls.id && s.day_of_week === day) {
+            const sub = normSub(s.subject);
+            if (!subjectSlotsMap[sub]) subjectSlotsMap[sub] = [];
+            subjectSlotsMap[sub].push(s);
+          }
+        });
+
+        Object.entries(subjectSlotsMap).forEach(([_sub, subSlots]) => {
+          if (subSlots.length === 2) {
+            const idx1 = clsBlocks.findIndex(b => b.start_time === subSlots[0].start_time);
+            const idx2 = clsBlocks.findIndex(b => b.start_time === subSlots[1].start_time);
+            if (idx1 >= 0 && idx2 >= 0 && Math.abs(idx1 - idx2) > 1) {
+              const dayMap: Record<string, string> = {
+                segunda: 'Segunda-feira',
+                terca: 'Terça-feira',
+                quarta: 'Quarta-feira',
+                quinta: 'Quinta-feira',
+                sexta: 'Sexta-feira'
+              };
+              const dayLabel = dayMap[day] || day;
+              list.push(`[${cls.name}] Aulas separadas: A turma tem 2 aulas de ${subSlots[0].subject} na ${dayLabel}, mas elas não estão em horários seguidos (dobradinha).`);
+            }
+          }
+        });
+      });
+    });
+
     return Array.from(new Set(list));
+  };
+
+  // Helper function to make double lessons (2 lessons of same subject on same day) consecutive
+  const makeDoubleLessonsConsecutive = (
+    inputSlots: ScheduleSlot[],
+    targetClasses: SchoolClass[],
+    teachersList: Teacher[],
+    activeTimeBlocks: TimeBlock[]
+  ): ScheduleSlot[] => {
+    let slots = [...inputSlots];
+    const daysList: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+    const normSub = (s: string) => (s || '').trim().toUpperCase();
+
+    targetClasses.forEach(cls => {
+      const clsBlocks = activeTimeBlocks
+        .filter(b => b.class_id === cls.id && !b.is_interval)
+        .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
+      daysList.forEach(day => {
+        const subjectSlotsMap: Record<string, ScheduleSlot[]> = {};
+        slots.forEach(s => {
+          if (s.class_id === cls.id && s.day_of_week === day) {
+            const sub = normSub(s.subject);
+            if (!subjectSlotsMap[sub]) subjectSlotsMap[sub] = [];
+            subjectSlotsMap[sub].push(s);
+          }
+        });
+
+        Object.entries(subjectSlotsMap).forEach(([_sub, subSlots]) => {
+          if (subSlots.length !== 2) return;
+
+          const getBlockIdx = (s: ScheduleSlot) =>
+            clsBlocks.findIndex(b => b.start_time === s.start_time);
+
+          let idx1 = getBlockIdx(subSlots[0]);
+          let idx2 = getBlockIdx(subSlots[1]);
+
+          if (idx1 < 0 || idx2 < 0) return;
+
+          if (idx1 > idx2) {
+            const temp = idx1;
+            idx1 = idx2;
+            idx2 = temp;
+          }
+
+          // Already consecutive!
+          if (idx2 === idx1 + 1) return;
+
+          const candidateTargets = [idx1 + 1, idx2 - 1];
+
+          for (const targetIdx of candidateTargets) {
+            if (targetIdx < 0 || targetIdx >= clsBlocks.length) continue;
+            if (targetIdx === idx1 || targetIdx === idx2) continue;
+
+            const targetBlock = clsBlocks[targetIdx];
+            const movingSlot = targetIdx === idx1 + 1
+              ? subSlots.find(s => getBlockIdx(s) === idx2)
+              : subSlots.find(s => getBlockIdx(s) === idx1);
+
+            if (!movingSlot) continue;
+
+            const movingSlotOriginalBlockIdx = getBlockIdx(movingSlot);
+
+            const otherSlotIdx = slots.findIndex(
+              s => s.class_id === cls.id && s.day_of_week === day && s.start_time === targetBlock.start_time
+            );
+
+            if (otherSlotIdx < 0) {
+              const movingTeacher = teachersList.find(t => t.id === movingSlot.teacher_id);
+              const conflict = slots.some(
+                s => s.class_id !== cls.id &&
+                     s.day_of_week === day &&
+                     s.start_time === targetBlock.start_time &&
+                     isSameTeacher(s.teacher_id, teachersList.find(t => t.id === s.teacher_id)?.name, movingSlot.teacher_id, movingTeacher?.name)
+              );
+
+              if (!conflict) {
+                movingSlot.start_time = targetBlock.start_time;
+                movingSlot.end_time = targetBlock.end_time;
+                break;
+              }
+            } else {
+              const otherSlot = slots[otherSlotIdx];
+              const movingTeacher = teachersList.find(t => t.id === movingSlot.teacher_id);
+              const otherTeacher = teachersList.find(t => t.id === otherSlot.teacher_id);
+
+              const movingSlotBlock = clsBlocks[movingSlotOriginalBlockIdx];
+
+              const movingConflict = slots.some(
+                s => s.class_id !== cls.id &&
+                     s.day_of_week === day &&
+                     s.start_time === targetBlock.start_time &&
+                     isSameTeacher(s.teacher_id, teachersList.find(t => t.id === s.teacher_id)?.name, movingSlot.teacher_id, movingTeacher?.name)
+              );
+
+              const otherConflict = slots.some(
+                s => s.class_id !== cls.id &&
+                     s.day_of_week === day &&
+                     s.start_time === movingSlotBlock.start_time &&
+                     isSameTeacher(s.teacher_id, teachersList.find(t => t.id === s.teacher_id)?.name, otherSlot.teacher_id, otherTeacher?.name)
+              );
+
+              if (!movingConflict && !otherConflict) {
+                const tmpStart = movingSlot.start_time;
+                const tmpEnd = movingSlot.end_time;
+
+                movingSlot.start_time = otherSlot.start_time;
+                movingSlot.end_time = otherSlot.end_time;
+
+                otherSlot.start_time = tmpStart;
+                otherSlot.end_time = tmpEnd;
+                break;
+              }
+            }
+          }
+        });
+      });
+    });
+
+    return slots;
   };
 
   // Helper to sanitize and fill schedule with strict rules (Max 2 lessons/day per subject, respect workloads, zero free slots)
   const sanitizeAndFillSchedule = (
     inputSlots: ScheduleSlot[],
     targetClasses: SchoolClass[],
-    teachers: Teacher[],
+    teachersList: Teacher[],
     activeTimeBlocks: TimeBlock[]
   ) => {
     const normSub = (s: string) => (s || '').trim().toUpperCase();
@@ -1935,11 +2095,12 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
       });
     });
 
-    // 3. Remove Teacher Time Conflicts
+    // 3. Remove Teacher Time Conflicts (considering same physical teacher like Gilva)
     const teacherTimeMap = new Set<string>();
     slots = slots.filter(s => {
-      const teacher = teachers.find(t => t.id === s.teacher_id);
-      const teacherKey = teacher ? teacher.name.trim().toUpperCase() : s.teacher_id;
+      const teacher = teachersList.find(t => t.id === s.teacher_id);
+      const normFirstName = teacher ? getNormalizedTeacherFirstName(teacher.name) : '';
+      const teacherKey = normFirstName.length >= 3 ? normFirstName : (teacher?.name || s.teacher_id).trim().toUpperCase();
       const key = `${teacherKey}_${s.day_of_week}_${s.start_time}`;
       if (teacherTimeMap.has(key)) return false;
       teacherTimeMap.add(key);
@@ -1981,7 +2142,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
 
           if (!isOccupied) {
             // Find available teachers with no time conflict
-            const availableTeachers = teachers.filter(t => {
+            const availableTeachers = teachersList.filter(t => {
               if (t.available_days && t.available_days.length > 0 && !t.available_days.includes(day)) return false;
               const hour = parseInt(block.start_time.split(':')[0] || '0', 10);
               const isMorning = hour < 12;
@@ -1991,7 +2152,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
               const hasConflict = slots.some(s => {
                 if (s.day_of_week !== day) return false;
                 if (!timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)) return false;
-                const sTeacher = teachers.find(tr => tr.id === s.teacher_id);
+                const sTeacher = teachersList.find(tr => tr.id === s.teacher_id);
                 return isSameTeacher(s.teacher_id, sTeacher?.name, t.id, t.name);
               });
               return !hasConflict;
@@ -2075,6 +2236,9 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         }
       });
     });
+
+    // 5. Make all double lessons consecutive (dobradinhas coladas)
+    slots = makeDoubleLessonsConsecutive(slots, targetClasses, teachersList, activeTimeBlocks);
 
     const detectedConflicts = checkConflictsForList(slots);
     return { finalSlots: slots, unfilledCount, detectedConflicts };

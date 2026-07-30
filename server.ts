@@ -178,6 +178,187 @@ const is678Grade = (className: string) => {
          /\b(6|7|8)\b/.test(norm);
 };
 
+const timeToMinutes = (timeStr: string): number => {
+  if (!timeStr) return 0;
+  const parts = timeStr.split(':');
+  const h = parseInt(parts[0] || '0', 10);
+  const m = parseInt(parts[1] || '0', 10);
+  return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
+};
+
+const getNormalizedTeacherFirstName = (name?: string): string => {
+  if (!name) return '';
+  const clean = name.trim().toLowerCase()
+    .replace(/^profª?\.?\s+/i, '')
+    .replace(/^professor[a]?\s+/i, '')
+    .replace(/^tio|tia\s+/i, '')
+    .trim();
+  const firstWord = clean.split(/[\s\-_]+/)[0] || '';
+  return firstWord;
+};
+
+const isSameTeacher = (t1Id?: string, t1Name?: string, t2Id?: string, t2Name?: string): boolean => {
+  if (t1Id && t2Id && t1Id === t2Id) return true;
+  if (!t1Name || !t2Name) return false;
+
+  const clean1 = t1Name.trim().toLowerCase();
+  const clean2 = t2Name.trim().toLowerCase();
+  if (clean1 === clean2) return true;
+
+  const fn1 = getNormalizedTeacherFirstName(t1Name);
+  const fn2 = getNormalizedTeacherFirstName(t2Name);
+
+  if (fn1.length >= 3 && fn1 === fn2) {
+    return true; // Recognizes "Gilva Matemática" and "Gilva DG" as the same physical teacher
+  }
+
+  return false;
+};
+
+const makeDoubleLessonsConsecutive = (
+  inputSlots: any[],
+  targetClasses: any[],
+  teachers: any[],
+  timeBlocks: any[]
+): any[] => {
+  let slots = [...inputSlots];
+  const daysList = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+  const normSub = (s: string) => (s || '').trim().toUpperCase();
+
+  targetClasses.forEach((cls: any) => {
+    const clsBlocks = timeBlocks
+      .filter((b: any) => b.class_id === cls.id && !b.is_interval)
+      .sort((a: any, b: any) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
+    daysList.forEach((day) => {
+      // Find subjects that have 2 lessons on this day for this class
+      const subjectSlotsMap: { [sub: string]: any[] } = {};
+      slots.forEach((s: any) => {
+        if (s.class_id === cls.id && s.day_of_week === day) {
+          const sub = normSub(s.subject);
+          if (!subjectSlotsMap[sub]) subjectSlotsMap[sub] = [];
+          subjectSlotsMap[sub].push(s);
+        }
+      });
+
+      Object.entries(subjectSlotsMap).forEach(([_sub, subSlots]) => {
+        if (subSlots.length !== 2) return;
+
+        const getBlockIdx = (s: any) =>
+          clsBlocks.findIndex((b: any) => b.start_time === s.start_time);
+
+        let idx1 = getBlockIdx(subSlots[0]);
+        let idx2 = getBlockIdx(subSlots[1]);
+
+        if (idx1 < 0 || idx2 < 0) return;
+
+        if (idx1 > idx2) {
+          const temp = idx1;
+          idx1 = idx2;
+          idx2 = temp;
+        }
+
+        // Check if already consecutive
+        if (idx2 === idx1 + 1) return; // Already consecutive!
+
+        // Not consecutive! Try to bring them together
+        const candidateTargets = [idx1 + 1, idx2 - 1];
+
+        for (const targetIdx of candidateTargets) {
+          if (targetIdx < 0 || targetIdx >= clsBlocks.length) continue;
+          if (targetIdx === idx1 || targetIdx === idx2) continue;
+
+          const targetBlock = clsBlocks[targetIdx];
+          const movingSlot = targetIdx === idx1 + 1
+            ? subSlots.find((s: any) => getBlockIdx(s) === idx2)
+            : subSlots.find((s: any) => getBlockIdx(s) === idx1);
+
+          if (!movingSlot) continue;
+
+          const movingSlotOriginalBlockIdx = getBlockIdx(movingSlot);
+
+          const otherSlotIdx = slots.findIndex(
+            (s: any) =>
+              s.class_id === cls.id &&
+              s.day_of_week === day &&
+              s.start_time === targetBlock.start_time
+          );
+
+          if (otherSlotIdx < 0) {
+            // Empty slot at targetIdx
+            const movingTeacher = teachers.find((t: any) => t.id === movingSlot.teacher_id);
+            const conflict = slots.some(
+              (s: any) =>
+                s.class_id !== cls.id &&
+                s.day_of_week === day &&
+                s.start_time === targetBlock.start_time &&
+                isSameTeacher(
+                  s.teacher_id,
+                  teachers.find((t: any) => t.id === s.teacher_id)?.name,
+                  movingSlot.teacher_id,
+                  movingTeacher?.name
+                )
+            );
+
+            if (!conflict) {
+              movingSlot.start_time = targetBlock.start_time;
+              movingSlot.end_time = targetBlock.end_time;
+              break;
+            }
+          } else {
+            // Swap with otherSlot if no conflicts
+            const otherSlot = slots[otherSlotIdx];
+            const movingTeacher = teachers.find((t: any) => t.id === movingSlot.teacher_id);
+            const otherTeacher = teachers.find((t: any) => t.id === otherSlot.teacher_id);
+
+            const movingSlotBlock = clsBlocks[movingSlotOriginalBlockIdx];
+
+            const movingConflict = slots.some(
+              (s: any) =>
+                s.class_id !== cls.id &&
+                s.day_of_week === day &&
+                s.start_time === targetBlock.start_time &&
+                isSameTeacher(
+                  s.teacher_id,
+                  teachers.find((t: any) => t.id === s.teacher_id)?.name,
+                  movingSlot.teacher_id,
+                  movingTeacher?.name
+                )
+            );
+
+            const otherConflict = slots.some(
+              (s: any) =>
+                s.class_id !== cls.id &&
+                s.day_of_week === day &&
+                s.start_time === movingSlotBlock.start_time &&
+                isSameTeacher(
+                  s.teacher_id,
+                  teachers.find((t: any) => t.id === s.teacher_id)?.name,
+                  otherSlot.teacher_id,
+                  otherTeacher?.name
+                )
+            );
+
+            if (!movingConflict && !otherConflict) {
+              const tmpStart = movingSlot.start_time;
+              const tmpEnd = movingSlot.end_time;
+
+              movingSlot.start_time = otherSlot.start_time;
+              movingSlot.end_time = otherSlot.end_time;
+
+              otherSlot.start_time = tmpStart;
+              otherSlot.end_time = tmpEnd;
+              break;
+            }
+          }
+        }
+      });
+    });
+  });
+
+  return slots;
+};
+
 // --- API ENDPOINT: AI Schedule Generator ---
 app.post('/api/schedule/generate-ai', async (req, res) => {
   try {
@@ -204,8 +385,8 @@ EXIGÊNCIAS RÍGIDAS DA DIREÇÃO DA ESCOLA (ZERO TOLERÂNCIA A ERROS):
    - Cada turma possui o mapa de cargas horárias (subject_workloads) de cada disciplina (ex: Espanhol = 1 aula/semana, Matemática = 5 aulas/semana).
    - É ABSOLUTAMENTE PROIBIDO ULTRAPASSAR A CARGA HORÁRIA DEFINIDA! Se Espanhol é 1 aula por semana, aloque EXATAMENTE 1 AULA de Espanhol na semana inteira para aquela turma (JAMAIS aloque 2 ou mais aulas de Espanhol).
 3. ZERO CONFLITOS DE PROFESSOR: Um professor não pode lecionar em 2 turmas no mesmo dia e mesmo horário.
-4. MÁXIMO DE 2 AULAS POR DIA DA MESMA MATÉRIA: Não coloque mais de 2 aulas da mesma matéria no mesmo dia em uma turma.
-5. DISPONIBILIDADE: Respeite os dias de trabalho, turno e disponibilidades dos professores.
+4. MÁXIMO DE 2 AULAS POR DIA DA MESMA MATÉRIA E OBRIGATORIAMENTE CONSECUTIVAS (DOBRADINHA / SEGUIDAS): Se uma turma tiver 2 aulas da mesma matéria no mesmo dia, elas DEVEM OBRIGATORIAMENTE ser em horários seguidos/colados (ex: 1º e 2º horário, ou 3º e 4º horário). JAMAIS separe as 2 aulas da mesma matéria no mesmo dia (ex: NUNCA coloque no 1º e 5º horário).
+5. DISPONIBILIDADE E NOMES COMPOSTOS: Respeite os dias de trabalho, turno e disponibilidades dos professores. Note que "Gilva - Matemática" e "Gilva - DG" representam a mesma pessoa física (professora Gilva) e NÃO podem ser alocadas no mesmo horário em turmas diferentes!
 6. EXPLICAÇÃO MINUCIOSA DE CONFLITOS: Se houver qualquer restrição, indisponibilidade ou choque de horário, explique detalhadamente na propriedade 'conflicts' o motivo.
 
 Dados Enviados:
@@ -225,7 +406,7 @@ Retorne em JSON:
       contents: promptText,
       config: {
         systemInstruction:
-          'Você é um algoritmo especialista sênior em alocação de grades escolares do Colégio Reação. REGRA ABSOLUTA: Respeite rigorosamente a carga horária de cada matéria (ex: Espanhol = 1 aula/semana, NUNCA dê 2 aulas). Turmas de 6º/7º/8º ano têm 5 aulas na seg/qua/sex e 6 na ter/qui. 9º ano e Médio têm 6 aulas todos os dias. Preencha 100% dos horários válidos sem deixar aulas vagas.',
+          'Você é um algoritmo especialista sênior em alocação de grades escolares do Colégio Reação. REGRA ABSOLUTA: Respeite rigorosamente a carga horária de cada matéria (ex: Espanhol = 1 aula/semana, NUNCA dê 2 aulas). Se houver 2 aulas da mesma matéria no mesmo dia, coloque em horários CONSECUTIVOS (DOBRADINHA). Turmas de 6º/7º/8º ano têm 5 aulas na seg/qua/sex e 6 na ter/qui. 9º ano e Médio têm 6 aulas todos os dias. Preencha 100% dos horários válidos sem deixar aulas vagas.',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -294,10 +475,13 @@ Retorne em JSON:
         });
       });
 
-      // Step 3: Remove Teacher Time Conflicts (a teacher in 2 classes at once)
+      // Step 3: Remove Teacher Time Conflicts (considering same teacher under different IDs/names like Gilva)
       const teacherTimeMap = new Set<string>();
       rawSlots = rawSlots.filter((s: any) => {
-        const key = `${s.teacher_id}_${s.day_of_week}_${s.start_time}`;
+        const teacher = teachers.find((t: any) => t.id === s.teacher_id);
+        const normFirstName = teacher ? getNormalizedTeacherFirstName(teacher.name) : '';
+        const teacherKey = normFirstName.length >= 3 ? normFirstName : (teacher?.name || s.teacher_id).trim().toUpperCase();
+        const key = `${teacherKey}_${s.day_of_week}_${s.start_time}`;
         if (teacherTimeMap.has(key)) return false;
         teacherTimeMap.add(key);
         return true;
@@ -309,7 +493,7 @@ Retorne em JSON:
       targetClasses.forEach((cls: any) => {
         const clsBlocks = timeBlocks
           .filter((b: any) => b.class_id === cls.id && !b.is_interval)
-          .sort((a: any, b: any) => a.start_time.localeCompare(b.start_time));
+          .sort((a: any, b: any) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
 
         const is678 = is678Grade(cls.name);
         const workloads = cls.subject_workloads || {};
@@ -344,12 +528,11 @@ Retorne em JSON:
                 if (t.availability_shift === 'matutino' && !isMorning) return false;
                 if (t.availability_shift === 'vespertino' && isMorning) return false;
 
-                const hasConflict = slots.some(
-                  (s: any) =>
-                    s.teacher_id === t.id &&
-                    s.day_of_week === day &&
-                    s.start_time === block.start_time
-                );
+                const hasConflict = slots.some((s: any) => {
+                  if (s.day_of_week !== day || s.start_time !== block.start_time) return false;
+                  const sTeacher = teachers.find((tr: any) => tr.id === s.teacher_id);
+                  return isSameTeacher(s.teacher_id, sTeacher?.name, t.id, t.name);
+                });
                 return !hasConflict;
               });
 
@@ -428,6 +611,9 @@ Retorne em JSON:
           });
         });
       });
+
+      // Step 5: MAKE ALL DOUBLE LESSONS CONSECUTIVE (DOBRADINHAS)
+      slots = makeDoubleLessonsConsecutive(slots, targetClasses, teachers, timeBlocks);
 
       return res.json({
         success: true,
