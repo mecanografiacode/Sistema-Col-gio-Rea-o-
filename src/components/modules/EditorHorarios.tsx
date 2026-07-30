@@ -4,6 +4,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Plus, Trash2, Edit2, AlertCircle, Save, Download, CalendarClock, Wand2, Eye, Pencil, X, Check } from 'lucide-react';
 import { storage } from '../../lib/storage';
+import { HorarioCSPSolver } from '../../lib/horarioSolver';
 
 const normalizeTime = (t: string): string => {
   if (!t) return '00:00';
@@ -2594,12 +2595,42 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
     setTimeBlocks(activeTimeBlocks);
     await storage.saveTimeBlocks(activeTimeBlocks);
 
-    // --- AUTOMATIC ORGANIZER WITH GEMINI 3.1 FLASH LITE ---
     setScheduleStatus({
-      message: '🤖 Organizando grade horária com a IA Gemini 3.1 Flash Lite...',
+      message: '⚙️ Executando Algoritmo CSP Profissional (Backtracking & Forward Checking)...',
       type: 'warning',
-      details: ['Analisando professores, cargas horárias e disponibilidades com a IA Gemini 3.1 Flash Lite...']
+      details: ['Calculando métricas de professores, ordem de disciplinas e restrições rígidas...']
     });
+
+    const solver = new HorarioCSPSolver(teachers, targetClasses, subjects, activeTimeBlocks);
+    const result = solver.solve();
+
+    const cspFinalSlots = [...runningSlots, ...result.slots];
+    setScheduleSlots(cspFinalSlots);
+    await storage.saveScheduleSlots(cspFinalSlots);
+
+    if (result.success && result.stats.unfilledSlots === 0) {
+      setScheduleStatus({
+        message: `✨ Sucesso! Grade horária gerada pelo Algoritmo CSP (${result.stats.filledSlots} aulas alocadas, 0 conflitos).`,
+        type: 'success',
+        details: [
+          `Turmas processadas: ${targetClasses.length}`,
+          `Total de aulas alocadas: ${result.stats.filledSlots}`,
+          `100% de ocupação sem horários vagos e máx 2 aulas/dia por matéria!`,
+          `Recurso da Profa. Gilva respeitado (Matemática e DG tratados como unificados).`
+        ]
+      });
+    } else {
+      setScheduleStatus({
+        message: `Organização CSP concluída (${result.stats.filledSlots} aulas agendadas):`,
+        type: result.stats.unfilledSlots === 0 ? 'success' : 'warning',
+        details: [
+          `Turmas processadas: ${targetClasses.length}`,
+          result.stats.unfilledSlots > 0 ? `⚠️ Aulas não alocadas / vagas: ${result.stats.unfilledSlots}` : `✅ 100% de ocupação`,
+          ...result.conflicts.map(c => `• ${c}`)
+        ]
+      });
+    }
+    return;
 
     try {
       const apiRes = await fetch('/api/schedule/generate-ai', {
@@ -3820,13 +3851,37 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         pageCount++;
 
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(16);
-        doc.text(`Grade de Aulas - Prof. ${teacher.name} (${shiftData.shiftName})`, 14, 15);
+        doc.setFontSize(14);
+        doc.text(`Grade de Aulas - Prof. ${teacher.name}`, 14, 12);
 
-        doc.setFontSize(10);
+        doc.setFontSize(9);
         doc.setFont('helvetica', 'normal');
         const teacherSubjects = teacher.subjects.join(', ');
-        doc.text(`Disciplinas: ${teacherSubjects || 'N/A'} | Carga Horária: ${teacher.workload_hours || 20}h | Turno: ${shiftData.shiftName}`, 14, 21);
+        
+        // Turno formatado do cadastro (ex: Matutino, Vespertino, Ambos / Matutino e Vespertino)
+        const shiftMap: Record<string, string> = {
+          matutino: 'Matutino',
+          vespertino: 'Vespertino',
+          ambos: 'Matutino e Vespertino'
+        };
+        const cadastredShift = shiftMap[teacher.availability_shift] || teacher.availability_shift || shiftData.shiftName;
+
+        // Turmas cadastradas para o professor (class_ids) ou turmas presentes na grade
+        const registeredClassNames = (teacher.class_ids || [])
+          .map(id => classes.find(c => c.id === id)?.name)
+          .filter(Boolean);
+        
+        const scheduledClassNames = Array.from(new Set(
+          teacherSlots.map(s => classes.find(c => c.id === s.class_id)?.name).filter(Boolean)
+        ));
+
+        // Unir turmas cadastradas com as alocadas na grade (sem duplicatas)
+        const allAssociatedClasses = Array.from(new Set([...registeredClassNames, ...scheduledClassNames])).join(', ') || 'Nenhuma turma informada';
+
+        const totalAssignedLessons = teacherSlots.length;
+
+        doc.text(`Disciplinas: ${teacherSubjects || 'N/A'} | Turno: ${cadastredShift} | Turmas: ${allAssociatedClasses}`, 14, 16.5);
+        doc.text(`Carga Horária / Aulas na Grade: ${totalAssignedLessons} aulas alocadas`, 14, 21);
 
         const body = shiftData.times.map(timeRange => {
           const [startTime, endTime] = timeRange.split(' - ');
@@ -3851,7 +3906,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         });
 
         autoTable(doc, {
-          startY: 27,
+          startY: 24,
           head: [headers],
           body: body,
           theme: 'grid',
