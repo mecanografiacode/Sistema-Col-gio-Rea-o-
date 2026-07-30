@@ -170,67 +170,88 @@ Dicas Específicas para o Colégio Reação:
 // --- API ENDPOINT: AI Schedule Generator ---
 app.post('/api/schedule/generate-ai', async (req, res) => {
   try {
-    const { teachers, classes, timeBlocks, targetClassIds } = req.body;
+    const { teachers, classes, timeBlocks, targetClassIds, subjects } = req.body;
     const ai = getGeminiClient();
 
     if (!ai) {
       return res.status(400).json({ error: 'Chave da API Gemini não configurada no servidor.' });
     }
 
+    const targetClasses = classes.filter((c: any) => targetClassIds.includes(c.id));
+
     const promptText = `
-Você é um especialista em planejamento e otimização de grades horárias escolares para o Colégio Reação em Brasília/DF.
-Sua tarefa é gerar a distribuição otimizada das aulas (Schedule Slots) para as turmas solicitadas, respeitando estritamente:
-1. A carga horária de disciplinas de cada turma.
-2. A disponibilidade e disciplinas habilitadas de cada professor.
-3. Os horários e blocos de tempo definidos para cada turma (ignorando intervalos/recreios).
-4. Sem sobreposição ou conflito de horário para nenhum professor (um professor não pode estar em duas turmas no mesmo dia e horário).
-5. Dias da semana permitidos: 'segunda', 'terca', 'quarta', 'quinta', 'sexta'.
+Você é um especialista e algoritmo sênior de inteligência artificial em planejamento e otimização de grades horárias escolares para o Colégio Reação em Brasília/DF.
+Sua tarefa é organizar automaticamente todas as aulas das turmas solicitadas com o modelo Gemini 3.1 Flash Lite.
 
-Dados recebidos:
-- Turmas: ${JSON.stringify(classes)}
-- Professores: ${JSON.stringify(teachers)}
-- Blocos de Tempo: ${JSON.stringify(timeBlocks)}
-- IDs das turmas alvo: ${JSON.stringify(targetClassIds)}
+DIRETRIZES E REGRAS ABSOLUTAS DA ESCOLA:
+1. NÃO PODE TER HORÁRIOS LIVRES (AULAS VAGAS): Todos os blocos de horário que não forem recreio/intervalo das turmas DEVEM ser obrigatoriamente preenchidos com disciplinas e professores correspondentes.
+2. RIGOR NA CARGA HORÁRIA: Obedeça estritamente à carga horária semanal de cada disciplina cadastrada para cada turma (subject_workloads). Se a disciplina tem carga de 2 aulas na semana para aquela turma, você DEVE alocar EXATAMENTE 2 aulas (jamais coloque 3 ou 4 aulas).
+3. ZERO CONFLITOS DE PROFESSOR: Um professor (ou professores com nomes similares como 'Priscylla' e 'Priscylla Gramática') JAMAIS pode estar alocado em duas turmas no mesmo dia e mesmo horário.
+4. MÁXIMO DE 2 AULAS DA MESMA DISCIPLINA POR DIA EM UMA TURMA: Não coloque mais de 2 aulas da mesma disciplina no mesmo dia para uma turma.
+5. DISPONIBILIDADE DO PROFESSOR: Respeite os dias de trabalho, turno (matutino/vespertino) e disponibilidade de cada docente.
+6. EXPLICAÇÃO DETALHADA DE CONFLITOS: Se houver qualquer conflito, incompatibilidade de horário de professor ou falta de carga horária habilitada de professores para cobrir as turmas, descreva de forma clara na propriedade 'conflicts' POR QUE o conflito aconteceu (ex: "Turma 8º Ano A: Faltam aulas para preencher a quinta-feira porque a professora Elizandra de Literatura não atende no turno matutino").
 
-Retorne um array JSON contendo os objetos de ScheduleSlot gerados com as propriedades:
-- class_id (string)
-- teacher_id (string)
-- subject (string)
-- day_of_week ('segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta')
-- start_time (string, ex: '07:15')
-- end_time (string, ex: '08:05')
+Dados da Escola:
+- Turmas Alvo e Cargas Horárias: ${JSON.stringify(targetClasses)}
+- Professores e Disciplinas Habilitadas: ${JSON.stringify(teachers)}
+- Blocos de Tempo (Aulas e Recreios): ${JSON.stringify(timeBlocks)}
+- Lista Completa de Disciplinas: ${JSON.stringify(subjects || [])}
+
+Retorne um objeto JSON estrito com:
+- slots: Array de ScheduleSlot contendo: class_id, teacher_id, subject, day_of_week ('segunda'|'terca'|'quarta'|'quinta'|'sexta'), start_time, end_time.
+- conflicts: Array de strings contendo explicações detalhadas de qualquer conflito, imprevisto ou restrição de professor encontrado.
+- summary: String com um resumo explicativo da grade gerada e taxa de ocupação das turmas.
 `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: 'gemini-3.1-flash-lite',
       contents: promptText,
       config: {
-        systemInstruction: 'Você é um algoritmo especialista sênior em alocação escolar sem conflitos de horários de professores. REGRA ABSOLUTA: Nenhum professor pode lecionar em duas turmas diferentes no mesmo dia e no mesmo horário (conflito zero). Retorne estritamente em JSON conforme o schema.',
+        systemInstruction:
+          'Você é um algoritmo e assistente sênior especialista do Colégio Reação utilizando o modelo Gemini 3.1 Flash Lite. REGRA ABSOLUTA: Não deixe horários vagos, respeite rigorosamente as cargas horárias das turmas e informe claramente qualquer motivo de conflito se houver.',
         responseMimeType: 'application/json',
         responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              class_id: { type: Type.STRING },
-              teacher_id: { type: Type.STRING },
-              subject: { type: Type.STRING },
-              day_of_week: { type: Type.STRING },
-              start_time: { type: Type.STRING },
-              end_time: { type: Type.STRING }
+          type: Type.OBJECT,
+          properties: {
+            slots: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  class_id: { type: Type.STRING },
+                  teacher_id: { type: Type.STRING },
+                  subject: { type: Type.STRING },
+                  day_of_week: { type: Type.STRING },
+                  start_time: { type: Type.STRING },
+                  end_time: { type: Type.STRING }
+                },
+                required: ['class_id', 'teacher_id', 'subject', 'day_of_week', 'start_time', 'end_time']
+              }
             },
-            required: ['class_id', 'teacher_id', 'subject', 'day_of_week', 'start_time', 'end_time']
-          }
+            conflicts: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: 'Explicativa minuciosa do porquê de conflitos ou restrições de horários encontradas'
+            },
+            summary: { type: Type.STRING, description: 'Resumo sobre a geração da grade horária' }
+          },
+          required: ['slots', 'conflicts', 'summary']
         }
       }
     });
 
     if (response.text) {
-      const generatedSlots = JSON.parse(response.text);
-      return res.json({ success: true, slots: generatedSlots });
+      const parsedData = JSON.parse(response.text);
+      return res.json({
+        success: true,
+        slots: parsedData.slots || [],
+        conflicts: parsedData.conflicts || [],
+        summary: parsedData.summary || 'Grade organizada pelo Gemini 3.1 Flash Lite.',
+        source: 'gemini-3.1-flash-lite'
+      });
     }
 
-    return res.status(500).json({ error: 'Falha ao gerar grade horária com IA.' });
+    return res.status(500).json({ error: 'Falha ao gerar grade horária com a IA Gemini 3.1 Flash Lite.' });
   } catch (error: any) {
     console.error('Error in /api/schedule/generate-ai:', error);
     return res.status(500).json({ error: error.message || 'Erro ao processar IA de horários' });

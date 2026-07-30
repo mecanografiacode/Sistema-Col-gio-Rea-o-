@@ -77,6 +77,35 @@ const is678Grade = (className: string) => {
          /\b(6|7|8)\b/.test(norm);
 };
 
+const getNormalizedTeacherFirstName = (name?: string): string => {
+  if (!name) return '';
+  const clean = name.trim().toLowerCase()
+    .replace(/^profª?\.?\s+/i, '')
+    .replace(/^professor[a]?\s+/i, '')
+    .replace(/^tio|tia\s+/i, '')
+    .trim();
+  const firstWord = clean.split(/[\s\-_]+/)[0] || '';
+  return firstWord;
+};
+
+const isSameTeacher = (t1Id?: string, t1Name?: string, t2Id?: string, t2Name?: string): boolean => {
+  if (t1Id && t2Id && t1Id === t2Id) return true;
+  if (!t1Name || !t2Name) return false;
+
+  const clean1 = t1Name.trim().toLowerCase();
+  const clean2 = t2Name.trim().toLowerCase();
+  if (clean1 === clean2) return true;
+
+  const fn1 = getNormalizedTeacherFirstName(t1Name);
+  const fn2 = getNormalizedTeacherFirstName(t2Name);
+
+  if (fn1.length >= 3 && fn1 === fn2) {
+    return true; // Recognizes "Gilva Matemática" and "Gilva DG" as the same physical teacher
+  }
+
+  return false;
+};
+
 interface EditorHorariosProps {
   currentUser: UserProfile;
 }
@@ -1804,12 +1833,14 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
   const checkConflictsForList = (slots: ScheduleSlot[]) => {
     const list: string[] = [];
     slots.forEach(slot => {
-      const conflictingSlots = slots.filter(s => 
-        s.id !== slot.id &&
-        s.teacher_id === slot.teacher_id &&
-        s.day_of_week === slot.day_of_week &&
-        timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)
-      );
+      const conflictingSlots = slots.filter(s => {
+        if (s.id === slot.id) return false;
+        if (s.day_of_week !== slot.day_of_week) return false;
+        if (!timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)) return false;
+        const teacher1 = teachers.find(t => t.id === slot.teacher_id);
+        const teacher2 = teachers.find(t => t.id === s.teacher_id);
+        return isSameTeacher(slot.teacher_id, teacher1?.name, s.teacher_id, teacher2?.name);
+      });
 
       const teacher = teachers.find(t => t.id === slot.teacher_id);
       let reason = '';
@@ -1841,6 +1872,17 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         list.push(`[${classes.find(c => c.id === slot.class_id)?.name || 'Turma'}] ${reason ? `${conflictReason} | ${reason}` : conflictReason}`);
       } else if (reason) {
         list.push(`[${classes.find(c => c.id === slot.class_id)?.name || 'Turma'}] ${reason}`);
+      }
+
+      // Verificar excesso de aulas da mesma matéria no mesmo dia (> 2 aulas por dia é proibido)
+      const sameSubjectDaySlots = slots.filter(s =>
+        s.class_id === slot.class_id &&
+        s.day_of_week === slot.day_of_week &&
+        s.subject.toUpperCase().trim() === slot.subject.toUpperCase().trim()
+      );
+      if (sameSubjectDaySlots.length > 2) {
+        const excessReason = `Excesso de Aulas: A turma tem ${sameSubjectDaySlots.length} aulas de ${slot.subject} na ${dayLabel} (máximo de 2 aulas por dia).`;
+        list.push(`[${classes.find(c => c.id === slot.class_id)?.name || 'Turma'}] ${excessReason}`);
       }
     });
     return Array.from(new Set(list));
@@ -2122,6 +2164,99 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
     setTimeBlocks(activeTimeBlocks);
     await storage.saveTimeBlocks(activeTimeBlocks);
 
+    // --- AUTOMATIC ORGANIZER WITH GEMINI 3.1 FLASH LITE ---
+    setScheduleStatus({
+      message: '🤖 Organizando grade horária com a IA Gemini 3.1 Flash Lite...',
+      type: 'warning',
+      details: ['Analisando professores, cargas horárias e disponibilidades com a IA Gemini 3.1 Flash Lite...']
+    });
+
+    try {
+      const apiRes = await fetch('/api/schedule/generate-ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teachers,
+          classes,
+          timeBlocks: activeTimeBlocks,
+          targetClassIds: Array.from(targetClassIds),
+          subjects
+        })
+      });
+
+      if (apiRes.ok) {
+        const aiData = await apiRes.json();
+        if (aiData.success && Array.isArray(aiData.slots) && aiData.slots.length > 0) {
+          const aiGeneratedSlots: ScheduleSlot[] = aiData.slots.map((s: any) => {
+            const matchedTeacher = teachers.find(t => t.id === s.teacher_id || t.name.toUpperCase().trim() === (s.teacher_id || '').toUpperCase().trim());
+            return {
+              id: crypto.randomUUID(),
+              class_id: s.class_id,
+              teacher_id: matchedTeacher ? matchedTeacher.id : s.teacher_id,
+              subject: s.subject,
+              day_of_week: s.day_of_week,
+              start_time: s.start_time,
+              end_time: s.end_time
+            };
+          });
+
+          const completeSlots = [...runningSlots, ...aiGeneratedSlots];
+          setScheduleSlots(completeSlots);
+          await storage.saveScheduleSlots(completeSlots);
+
+          // Verify conflicts and unfilled required slots
+          const detectedConflicts = checkConflictsForList(completeSlots);
+          const aiConflicts: string[] = aiData.conflicts || [];
+          const allConflicts = Array.from(new Set([...aiConflicts, ...detectedConflicts]));
+
+          let unfilledCount = 0;
+          const daysList: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+          targetClasses.forEach(cls => {
+            const clsBlocks = activeTimeBlocks
+              .filter(b => b.class_id === cls.id && !b.is_interval)
+              .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+            daysList.forEach(day => {
+              clsBlocks.forEach(block => {
+                const isOccupied = completeSlots.some(s =>
+                  s.class_id === cls.id &&
+                  s.day_of_week === day &&
+                  timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)
+                );
+                if (!isOccupied) unfilledCount++;
+              });
+            });
+          });
+
+          if (allConflicts.length === 0 && unfilledCount === 0) {
+            setScheduleStatus({
+              message: `✨ Sucesso! Grade 100% organizada com Gemini 3.1 Flash Lite (${aiGeneratedSlots.length} aulas, 0 horários vagos).`,
+              type: 'success',
+              details: [
+                `Modelo de IA utilizado: Gemini 3.1 Flash Lite`,
+                `Turmas processadas: ${targetClasses.length}`,
+                `Total de aulas alocadas: ${aiGeneratedSlots.length}`,
+                `Zero horários vagos e zero conflitos de professores!`
+              ]
+            });
+            return;
+          } else {
+            setScheduleStatus({
+              message: `Grade gerada com Gemini 3.1 Flash Lite (${aiGeneratedSlots.length} aulas). Ocorrências/motivos de conflito:`,
+              type: 'warning',
+              details: [
+                `Modelo de IA utilizado: Gemini 3.1 Flash Lite`,
+                unfilledCount > 0 ? `⚠️ Horários vagos não preenchidos: ${unfilledCount} bloco(s)` : `✅ 0 horários vagos`,
+                ...allConflicts.map(c => `• ${c}`)
+              ]
+            });
+            return;
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Conexão remota de IA falhou, executando otimizador local de contingência:', error);
+    }
+
     let totalDemandedOverall = 0;
     let scheduledWithTeacherOverall = 0;
     const logDetails: string[] = [];
@@ -2306,11 +2441,12 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
               );
               if (isSlot1Occupied) continue;
 
-              const hasTeacherConflict1 = trialRunningSlots.some(s =>
-                s.teacher_id === t.id &&
-                s.day_of_week === day &&
-                timesOverlap(s.start_time, s.end_time, b1.start_time, b1.end_time)
-              );
+              const hasTeacherConflict1 = trialRunningSlots.some(s => {
+                if (s.day_of_week !== day) return false;
+                if (!timesOverlap(s.start_time, s.end_time, b1.start_time, b1.end_time)) return false;
+                const sTeacher = teachers.find(tr => tr.id === s.teacher_id);
+                return isSameTeacher(s.teacher_id, sTeacher?.name, t.id, t.name);
+              });
               if (hasTeacherConflict1) continue;
 
               if (m.size === 2) {
@@ -2322,17 +2458,18 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 );
                 if (isSlot2Occupied) continue;
 
-                const hasTeacherConflict2 = trialRunningSlots.some(s =>
-                  s.teacher_id === t.id &&
-                  s.day_of_week === day &&
-                  timesOverlap(s.start_time, s.end_time, b2.start_time, b2.end_time)
-                );
+                const hasTeacherConflict2 = trialRunningSlots.some(s => {
+                  if (s.day_of_week !== day) return false;
+                  if (!timesOverlap(s.start_time, s.end_time, b2.start_time, b2.end_time)) return false;
+                  const sTeacher = teachers.find(tr => tr.id === s.teacher_id);
+                  return isSameTeacher(s.teacher_id, sTeacher?.name, t.id, t.name);
+                });
                 if (hasTeacherConflict2) continue;
               }
 
-              // Regra 4: As turmas não podem ter mais que 3 aulas da mesma matéria no mesmo dia
-              if (dayLessonsCount + m.size > 3) {
-                continue; // Proibido estritamente ultrapassar 3 aulas da mesma matéria por turma no dia
+              // Regra 4: As turmas não podem ter mais que 2 aulas da mesma matéria no mesmo dia (no máximo 2 aulas/dia por matéria)
+              if (dayLessonsCount + m.size > 2) {
+                continue; // Proibido estritamente ultrapassar 2 aulas da mesma matéria por turma no dia
               }
 
               // REGRA 1 (RESTRIÇÃO RÍGIDA): Disponibilidade do Professor (Dias, Turno, Horários e Grade)
@@ -2396,9 +2533,9 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 penalty += 2000;
               }
 
-              // Se já houver 2 aulas da matéria no dia e for adicionar a 3ª (permitido, mas leve preferência por 2)
-              if (dayLessonsCount + m.size === 3) {
-                penalty += 100;
+              // Se já houver 1 aula da matéria no dia e for adicionar a 2ª
+              if (dayLessonsCount + m.size === 2) {
+                penalty += 10;
               }
 
               const workloadRatio = teacherAssignedHours / (t.workload_hours || 20);
@@ -2467,7 +2604,138 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         }
       }
 
-      const trialScore = (scheduledCount * 1000) - ((totalDemanded - scheduledCount) * 2000);
+      // PASSE DE PREENCHIMENTO DE LACUNAS / HORÁRIOS OBRIGATÓRIOS VAGOS
+      targetClasses.forEach(cls => {
+        const clsBlocks = activeTimeBlocks
+          .filter(b => b.class_id === cls.id && !b.is_interval)
+          .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+        const isTargetSpecialClass = is678Grade(cls.name);
+
+        days.forEach(day => {
+          const isShortDay = isTargetSpecialClass && (day === 'segunda' || day === 'quarta' || day === 'sexta');
+          const maxIndex = isShortDay ? Math.min(5, clsBlocks.length) : clsBlocks.length;
+
+          for (let i = 0; i < maxIndex; i++) {
+            const block = clsBlocks[i];
+            const isOccupied = trialRunningSlots.some(s =>
+              s.class_id === cls.id &&
+              s.day_of_week === day &&
+              timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)
+            );
+
+            if (!isOccupied) {
+              let candidates: { teacher: Teacher; subjectName: string; penalty: number }[] = [];
+
+              let workloads = cls.subject_workloads;
+              if (!workloads || Object.keys(workloads).length === 0) {
+                workloads = cls.group === 'infantil' ? DEFAULT_INFANTIL_WORKLOAD :
+                            cls.group === 'anos_iniciais' ? DEFAULT_INICIAIS_WORKLOAD :
+                            cls.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD;
+              }
+
+              const normalizedWorkloads: { [subject: string]: number } = {};
+              Object.entries(workloads).forEach(([subject, hours]) => {
+                if (!subject || hours <= 0) return;
+                const key = subject.trim().toUpperCase();
+                normalizedWorkloads[key] = (normalizedWorkloads[key] || 0) + hours;
+              });
+
+              const classSubjects = Object.keys(normalizedWorkloads);
+              classSubjects.forEach(subUpper => {
+                const targetHours = normalizedWorkloads[subUpper] || 0;
+                const scheduledForSub = trialRunningSlots.filter(s =>
+                  s.class_id === cls.id && s.subject.toUpperCase().trim() === subUpper
+                ).length;
+
+                // NUNCA exceder a carga horária definida para a matéria na turma (ex: se DG é 2 aulas, NUNCA colocar 3 ou 4)
+                if (scheduledForSub >= targetHours) return;
+
+                const qTeachers = teachers.filter(t =>
+                  t.subjects.some(sub => sub.toUpperCase().trim() === subUpper) &&
+                  t.groups.includes(cls.group) &&
+                  (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(cls.id))
+                );
+
+                qTeachers.forEach(t => {
+                  if (!isTeacherAvailable(t, day, block, clsBlocks)) return;
+
+                  const hasTeacherConflict = trialRunningSlots.some(s => {
+                    if (s.day_of_week !== day) return false;
+                    if (!timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)) return false;
+                    const sTeacher = teachers.find(tr => tr.id === s.teacher_id);
+                    return isSameTeacher(s.teacher_id, sTeacher?.name, t.id, t.name);
+                  });
+                  if (hasTeacherConflict) return;
+
+                  const dayLessonsCount = trialRunningSlots.filter(s =>
+                    s.class_id === cls.id &&
+                    s.day_of_week === day &&
+                    s.subject.toUpperCase().trim() === subUpper
+                  ).length;
+
+                  if (dayLessonsCount >= 2) return; // Máximo de 2 aulas da mesma matéria por dia para uma turma
+
+                  let penalty = 0;
+                  if (scheduledForSub < targetHours) {
+                    penalty -= 1000;
+                  }
+
+                  candidates.push({
+                    teacher: t,
+                    subjectName: getDisplaySubjectName(subUpper),
+                    penalty
+                  });
+                });
+              });
+
+              if (candidates.length > 0) {
+                candidates.sort((a, b) => a.penalty - b.penalty);
+                const bestCandidate = candidates[0];
+
+                trialRunningSlots.push({
+                  id: crypto.randomUUID(),
+                  class_id: cls.id,
+                  teacher_id: bestCandidate.teacher.id,
+                  subject: bestCandidate.subjectName,
+                  day_of_week: day,
+                  start_time: block.start_time,
+                  end_time: block.end_time
+                });
+
+                scheduledCount += 1;
+              }
+            }
+          }
+        });
+      });
+
+      // Compute unfilled required slots
+      let unfilledRequiredSlots = 0;
+      targetClasses.forEach(cls => {
+        const clsBlocks = activeTimeBlocks
+          .filter(b => b.class_id === cls.id && !b.is_interval)
+          .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+        const isTargetSpecialClass = is678Grade(cls.name);
+
+        days.forEach(day => {
+          const isShortDay = isTargetSpecialClass && (day === 'segunda' || day === 'quarta' || day === 'sexta');
+          const maxIndex = isShortDay ? Math.min(5, clsBlocks.length) : clsBlocks.length;
+
+          for (let i = 0; i < maxIndex; i++) {
+            const block = clsBlocks[i];
+            const isOccupied = trialRunningSlots.some(s =>
+              s.class_id === cls.id &&
+              s.day_of_week === day &&
+              timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)
+            );
+            if (!isOccupied) {
+              unfilledRequiredSlots += 1;
+            }
+          }
+        });
+      });
+
+      const trialScore = (scheduledCount * 1000) - (unfilledRequiredSlots * 50000) - (totalPenalty * 10);
 
       const trialClassResults = targetClasses.map(c => {
         let workloads = c.subject_workloads;
@@ -2487,6 +2755,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
 
       return {
         trialScheduledOverall: scheduledCount,
+        unfilledRequiredSlots,
         totalDemanded,
         totalPenalty,
         score: trialScore,
@@ -2502,16 +2771,16 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
       trials.push(runTrial(t));
     }
 
-    // Find the maximum allocation achieved in any trial
-    const maxScheduled = Math.max(...trials.map(t => t.trialScheduledOverall));
+    // 1. Filter trials that achieved minimum unfilled required slots (0 if possible)
+    const minUnfilled = Math.min(...trials.map(t => t.unfilledRequiredSlots));
+    const bestUnfilledTrials = trials.filter(t => t.unfilledRequiredSlots === minUnfilled);
 
-    // Filter trials that reached the best allocation
-    const bestAllocationTrials = trials.filter(t => t.trialScheduledOverall === maxScheduled);
+    // 2. Find the maximum allocation achieved among those
+    const maxScheduled = Math.max(...bestUnfilledTrials.map(t => t.trialScheduledOverall));
+    const bestAllocationTrials = bestUnfilledTrials.filter(t => t.trialScheduledOverall === maxScheduled);
 
-    // Among those with the best allocation, find the minimum total penalty
+    // 3. Among those with the best allocation, find the minimum total penalty
     const minPenalty = Math.min(...bestAllocationTrials.map(t => t.totalPenalty));
-
-    // Filter trials that have the minimum penalty (or within a tiny margin)
     const bestTrials = bestAllocationTrials.filter(t => t.totalPenalty <= minPenalty + 5);
 
     // Randomly select one of the top-performing trials to ensure a fresh, beautifully scattered layout on every click
@@ -3118,6 +3387,125 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
     doc.save(`grade_horaria_professores.pdf`);
   };
 
+  const exportMatrixPDF = (targetShift: 'matutino' | 'vespertino' | 'ambos') => {
+    setIsExportModalOpen(false);
+
+    const shiftsToExport: ('matutino' | 'vespertino')[] = 
+      targetShift === 'ambos' ? ['matutino', 'vespertino'] : [targetShift];
+
+    const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+    const daysOfWeek: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+    const dayLabels: Record<DayOfWeek, string> = {
+      segunda: 'SEGUNDA',
+      terca: 'TERÇA',
+      quarta: 'QUARTA',
+      quinta: 'QUINTA',
+      sexta: 'SEXTA',
+      sabado: 'SÁBADO'
+    };
+
+    const defaultMorningBlocks = [
+      { label: '1º', start_time: '07:15', end_time: '08:05', is_interval: false },
+      { label: '2º', start_time: '08:05', end_time: '08:55', is_interval: false },
+      { label: 'RECREIO', start_time: '08:55', end_time: '09:10', is_interval: true },
+      { label: '3º', start_time: '09:10', end_time: '10:00', is_interval: false },
+      { label: '4º', start_time: '10:00', end_time: '10:50', is_interval: false },
+      { label: '5º', start_time: '10:50', end_time: '11:40', is_interval: false },
+      { label: '6º', start_time: '11:40', end_time: '12:30', is_interval: false }
+    ];
+
+    const defaultAfternoonBlocks = [
+      { label: '1º', start_time: '13:30', end_time: '14:20', is_interval: false },
+      { label: '2º', start_time: '14:20', end_time: '15:10', is_interval: false },
+      { label: '3º', start_time: '15:10', end_time: '16:00', is_interval: false },
+      { label: 'RECREIO', start_time: '16:00', end_time: '16:20', is_interval: true },
+      { label: '4º', start_time: '16:20', end_time: '17:10', is_interval: false },
+      { label: '5º', start_time: '17:10', end_time: '18:00', is_interval: false },
+      { label: '6º', start_time: '18:00', end_time: '18:50', is_interval: false }
+    ];
+
+    let pageCount = 0;
+
+    shiftsToExport.forEach(shift => {
+      const shiftClasses = classes.filter(cls => {
+        const cShift = getClassShift(cls);
+        return cShift === shift;
+      }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+      if (shiftClasses.length === 0) return;
+
+      if (pageCount > 0) {
+        doc.addPage();
+      }
+      pageCount++;
+
+      const blocks = shift === 'vespertino' ? defaultAfternoonBlocks : defaultMorningBlocks;
+      const shiftTitle = shift === 'matutino' ? 'MATUTINO' : 'VESPERTINO';
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.text(`Visão Geral da Grade Horária - Turno ${shiftTitle}`, 14, 12);
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Apenas Disciplinas (Sem nomes de professores)`, 14, 17);
+
+      const headers = ['DIA', 'HORÁRIO', ...shiftClasses.map(c => c.name.toUpperCase())];
+
+      const body: string[][] = [];
+
+      daysOfWeek.forEach(dayKey => {
+        blocks.forEach((block) => {
+          const row: string[] = [];
+
+          row.push(dayLabels[dayKey]);
+          row.push(`${block.label}\n(${block.start_time} - ${block.end_time})`);
+
+          shiftClasses.forEach(cls => {
+            if (block.is_interval) {
+              row.push('☕ RECREIO');
+            } else {
+              const slot = scheduleSlots.find(
+                s => s.class_id === cls.id &&
+                s.day_of_week === dayKey &&
+                s.start_time === block.start_time &&
+                s.end_time === block.end_time
+              );
+              row.push(slot ? slot.subject : '-');
+            }
+          });
+
+          body.push(row);
+        });
+      });
+
+      const numCols = headers.length;
+      let fontSize = 8;
+      if (numCols > 10) fontSize = 6;
+      else if (numCols > 7) fontSize = 7;
+
+      autoTable(doc, {
+        startY: 21,
+        head: [headers],
+        body: body,
+        theme: 'grid',
+        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center' },
+        styles: { fontSize, halign: 'center', valign: 'middle', cellPadding: 1.5 },
+        columnStyles: {
+          0: { fontStyle: 'bold', halign: 'center', cellWidth: 22, fillColor: [241, 245, 249] },
+          1: { fontStyle: 'bold', halign: 'center', cellWidth: 26, fillColor: [248, 250, 252] }
+        },
+        margin: { left: 10, right: 10, top: 10, bottom: 10 }
+      });
+    });
+
+    if (pageCount === 0) {
+      alert('Nenhuma turma encontrada para o turno selecionado.');
+      return;
+    }
+
+    doc.save(`visao_geral_grade_horaria_${targetShift}.pdf`);
+  };
+
   const currentSelectedClass = classes.find(c => c.id === selectedClassId);
   const currentShiftName = currentSelectedClass ? getClassShift(currentSelectedClass) : 'matutino';
 
@@ -3163,7 +3551,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <Wand2 className="w-5 h-5 text-red-600" />
-                <h3 className="font-bold text-slate-800 text-base">Organizar Grade Automática</h3>
+                <h3 className="font-bold text-slate-800 text-base">Organizar Grade com IA Gemini 3.1 Flash Lite</h3>
               </div>
               <button onClick={() => setIsAutoModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-4 h-4" />
@@ -3171,18 +3559,18 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
             </div>
 
             <p className="text-xs text-slate-500">
-              Escolha qual escopo de turmas deseja organizar automaticamente com base nas disciplinas e professores cadastrados:
+              Organização automática de aulas com a IA <strong className="text-slate-700">Gemini 3.1 Flash Lite</strong>:
             </p>
 
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
-              <p className="font-bold text-slate-800 text-xs flex items-center gap-1">
-                <span>🎯</span> Regras de Alocação Inteligente:
+            <div className="p-3 bg-red-50/60 rounded-xl border border-red-200 space-y-1.5 text-xs">
+              <p className="font-bold text-red-900 text-xs flex items-center gap-1">
+                <span>🤖</span> Regras Rigorosas do Modelo Gemini 3.1 Flash Lite:
               </p>
-              <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-600 font-medium">
-                <li><strong className="text-slate-700">1º Disponibilidade:</strong> Respeita rigorosamente dias de trabalho, turnos e grade de cada professor.</li>
-                <li><strong className="text-slate-700">2º Concentração de Carga:</strong> Professores com poucas aulas lecionam para todos os seus segmentos no mesmo dia.</li>
-                <li><strong className="text-slate-700">3º Proximidade de Aulas:</strong> Evita grandes janelas na mesma matéria (no máximo 1 horário de intervalo).</li>
-                <li><strong className="text-slate-700">4º Limite por Turma:</strong> Máximo de 3 aulas da mesma disciplina por dia em uma turma.</li>
+              <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-700 font-medium">
+                <li><strong className="text-red-700">1. Zero Horários Livres:</strong> Preenche 100% dos horários das turmas sem deixar aulas vagas.</li>
+                <li><strong className="text-red-700">2. Rigor na Carga Horária:</strong> Aloca exatamente a carga horária de cada matéria (sem aulas excedentes).</li>
+                <li><strong className="text-red-700">3. Explicação de Conflitos:</strong> Caso ocorra qualquer conflito de professor ou indisponibilidade, a IA informa detalhadamente o porquê.</li>
+                <li><strong className="text-red-700">4. Máximo 2 Aulas/Dia:</strong> Limita no máximo 2 aulas da mesma disciplina por dia em cada turma.</li>
               </ul>
             </div>
 
@@ -3192,8 +3580,8 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                   onClick={() => runAutoOrganize('selected')}
                   className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-red-500 hover:bg-red-50/50 transition-all group"
                 >
-                  <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">⚡ Organizar Apenas {currentSelectedClass?.name}</p>
-                  <p className="text-[10px] text-slate-500 mt-0.5">Aloca aulas apenas para a turma atualmente selecionada.</p>
+                  <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">⚡ Organizar com IA Apenas {currentSelectedClass?.name}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Aloca com Gemini 3.1 Flash Lite apenas para a turma selecionada.</p>
                 </button>
               )}
 
@@ -3202,7 +3590,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-red-500 hover:bg-red-50/50 transition-all group"
               >
                 <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">
-                  ⚡ Organizar TODAS as Turmas do Turno ({currentShiftName.toUpperCase()})
+                  ⚡ Organizar com IA TODAS as Turmas do Turno ({currentShiftName.toUpperCase()})
                 </p>
                 <p className="text-[10px] text-slate-500 mt-0.5">
                   Organiza todas as turmas do turno {currentShiftName} simultaneamente sem conflitos de professores.
@@ -3213,8 +3601,8 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 onClick={() => runAutoOrganize('all')}
                 className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-red-500 hover:bg-red-50/50 transition-all group"
               >
-                <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">⚡ Organizar TODAS as Turmas da Escola (Geral)</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">Mapeia e aloca todas as turmas de todos os turnos e segmentos.</p>
+                <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">⚡ Organizar com IA TODAS as Turmas da Escola (Geral)</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">Mapeia e aloca todas as turmas de todos os turnos e segmentos com o Gemini 3.1 Flash Lite.</p>
               </button>
             </div>
 
@@ -3245,45 +3633,85 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
             </div>
 
             <p className="text-xs text-slate-500">
-              Selecione o formato de relatório que deseja exportar:
+              Selecione o formato de relatório que deseja exportar em PDF:
             </p>
 
-            <div className="space-y-2">
-              {selectedClassId && (
-                <button
-                  onClick={exportPDFCurrentClass}
-                  className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-slate-800 hover:bg-slate-50 transition-all group"
-                >
-                  <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">📄 Exportar Turma Atual ({currentSelectedClass?.name})</p>
-                  <p className="text-[10px] text-slate-500 mt-0.5">Gera o arquivo PDF individual da turma selecionada.</p>
-                </button>
-              )}
-
-              <button
-                onClick={() => exportAllClassesPDF(classes.filter(c => getClassShift(c) === currentShiftName), `Turno_${currentShiftName}`)}
-                className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-slate-800 hover:bg-slate-50 transition-all group"
-              >
-                <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">
-                  📚 Exportar TODAS as Turmas do Turno ({currentShiftName.toUpperCase()})
+            <div className="space-y-3">
+              {/* VISÃO GERAL MATRIX (SEM NOME DO PROFESSOR) */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                <p className="text-[11px] font-bold uppercase text-slate-800 tracking-wider flex items-center gap-1">
+                  <span>📊</span> Visão Geral em Matriz (Apenas Matérias, sem Professores)
                 </p>
-                <p className="text-[10px] text-slate-500 mt-0.5">Consolida as turmas do turno {currentShiftName} em um único documento PDF.</p>
-              </button>
+                <div className="grid grid-cols-1 gap-1.5">
+                  <button
+                    onClick={() => exportMatrixPDF('matutino')}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-red-600 hover:bg-red-50/50 transition-all group"
+                  >
+                    <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">☀️ Visão Geral - Matutino</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Grade em matriz com todas as turmas do matutino sem o nome do professor.</p>
+                  </button>
 
-              <button
-                onClick={() => exportAllClassesPDF(classes, 'Geral_Escola')}
-                className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-slate-800 hover:bg-slate-50 transition-all group"
-              >
-                <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">🏫 Exportar TODAS as Turmas da Escola</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">Gera relatório completo com todas as turmas de todos os segmentos.</p>
-              </button>
+                  <button
+                    onClick={() => exportMatrixPDF('vespertino')}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-red-600 hover:bg-red-50/50 transition-all group"
+                  >
+                    <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">🌙 Visão Geral - Vespertino</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Grade em matriz com todas as turmas do vespertino sem o nome do professor.</p>
+                  </button>
 
-              <button
-                onClick={exportTeacherSchedulesPDF}
-                className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-slate-800 hover:bg-slate-50 transition-all group"
-              >
-                <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">👨‍🏫 Exportar Grade por Professor (Individual)</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">Gera arquivo PDF com a agenda semanal detalhada de cada docente.</p>
-              </button>
+                  <button
+                    onClick={() => exportMatrixPDF('ambos')}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-red-600 hover:bg-red-50/50 transition-all group"
+                  >
+                    <p className="font-bold text-xs text-slate-800 group-hover:text-red-700">🏫 Visão Geral Completa (Matutino + Vespertino)</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Gera relatório completo da escola em matriz sem nomes de professores.</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* RELATÓRIOS INDIVIDUAIS POR TURMA E PROFESSOR */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                <p className="text-[11px] font-bold uppercase text-slate-800 tracking-wider flex items-center gap-1">
+                  <span>📑</span> Relatórios Individuais (Com Professores)
+                </p>
+                <div className="grid grid-cols-1 gap-1.5">
+                  {selectedClassId && (
+                    <button
+                      onClick={exportPDFCurrentClass}
+                      className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-slate-800 hover:bg-slate-100 transition-all group"
+                    >
+                      <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">📄 Turma Atual ({currentSelectedClass?.name})</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">PDF individual da turma selecionada.</p>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => exportAllClassesPDF(classes.filter(c => getClassShift(c) === currentShiftName), `Turno_${currentShiftName}`)}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-slate-800 hover:bg-slate-100 transition-all group"
+                  >
+                    <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">
+                      📚 Todas as Turmas do Turno ({currentShiftName.toUpperCase()})
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Consolida as turmas do turno {currentShiftName} (página por turma).</p>
+                  </button>
+
+                  <button
+                    onClick={() => exportAllClassesPDF(classes, 'Geral_Escola')}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-slate-800 hover:bg-slate-100 transition-all group"
+                  >
+                    <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">🏫 Todas as Turmas da Escola</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Gera relatório de todas as turmas da escola (página por turma).</p>
+                  </button>
+
+                  <button
+                    onClick={exportTeacherSchedulesPDF}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-slate-800 hover:bg-slate-100 transition-all group"
+                  >
+                    <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">👨‍🏫 Agenda por Professor</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">PDF individual com a agenda semanal de cada docente.</p>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="pt-2 flex justify-end">
