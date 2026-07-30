@@ -3834,11 +3834,17 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
 
           daysOfWeek.forEach(day => {
             const slot = teacherSlots.find(s => s.day_of_week === day && s.start_time === startTime && s.end_time === endTime);
+            const blockIdx = shiftData.times.indexOf(timeRange);
+            const block = timeBlocks.find(b => b.start_time === startTime && b.end_time === endTime) || { start_time: startTime, end_time: endTime };
+            const isAvailable = isTeacherAvailable(teacher, day, block, blockIdx);
+
             if (slot) {
               const cls = classes.find(c => c.id === slot.class_id);
               row.push(`${slot.subject}\n(${cls ? cls.name : 'Turma'})`);
+            } else if (!isAvailable) {
+              row.push('---'); // Traço para horário indisponível
             } else {
-              row.push('---------');
+              row.push('Livre');
             }
           });
           return row;
@@ -3859,7 +3865,142 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
       });
     });
 
-    doc.save(`grade_horaria_professores.pdf`);
+    doc.save(`grade_horaria_professores_disponibilidade.pdf`);
+  };
+
+  const exportSubjectWorkloadsPDF = () => {
+    setIsExportModalOpen(false);
+    const doc = new jsPDF({ orientation: 'portrait', format: 'a4' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text('Carga Horária das Disciplinas por Turma', 14, 15);
+
+    const headers = ['Turma', 'Turno', 'Disciplina', 'Aulas Semanais'];
+    const body: string[][] = [];
+
+    classes.forEach(cls => {
+      const workloads = cls.subject_workloads || (cls.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD);
+      Object.entries(workloads).forEach(([sub, hours]) => {
+        if (typeof hours === 'number' && hours > 0) {
+          body.push([cls.name, getClassShift(cls).toUpperCase(), sub, `${hours}h`]);
+        }
+      });
+    });
+
+    autoTable(doc, {
+      startY: 22,
+      head: [headers],
+      body: body,
+      theme: 'grid',
+      headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255] },
+      styles: { fontSize: 9, halign: 'center', valign: 'middle' },
+      margin: { left: 14, right: 14 }
+    });
+
+    doc.save('carga_horaria_disciplinas_turmas.pdf');
+  };
+
+  const exportEmptyMatrixWithRulesPDF = (targetShift: 'matutino' | 'vespertino') => {
+    setIsExportModalOpen(false);
+    const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+    const daysOfWeek: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+    const dayLabels: Record<DayOfWeek, string> = {
+      segunda: 'SEGUNDA',
+      terca: 'TERÇA',
+      quarta: 'QUARTA',
+      quinta: 'QUINTA',
+      sexta: 'SEXTA',
+      sabado: 'SÁBADO'
+    };
+
+    const defaultMorningBlocks = [
+      { label: '1º', start_time: '07:15', end_time: '08:05', is_interval: false },
+      { label: '2º', start_time: '08:05', end_time: '08:55', is_interval: false },
+      { label: 'RECREIO', start_time: '08:55', end_time: '09:10', is_interval: true },
+      { label: '3º', start_time: '09:10', end_time: '10:00', is_interval: false },
+      { label: '4º', start_time: '10:00', end_time: '10:50', is_interval: false },
+      { label: '5º', start_time: '10:50', end_time: '11:40', is_interval: false },
+      { label: '6º', start_time: '11:40', end_time: '12:30', is_interval: false }
+    ];
+
+    const defaultAfternoonBlocks = [
+      { label: '1º', start_time: '13:30', end_time: '14:20', is_interval: false },
+      { label: '2º', start_time: '14:20', end_time: '15:10', is_interval: false },
+      { label: '3º', start_time: '15:10', end_time: '16:00', is_interval: false },
+      { label: 'RECREIO', start_time: '16:00', end_time: '16:20', is_interval: true },
+      { label: '4º', start_time: '16:20', end_time: '17:10', is_interval: false },
+      { label: '5º', start_time: '17:10', end_time: '18:00', is_interval: false },
+      { label: '6º', start_time: '18:00', end_time: '18:50', is_interval: false }
+    ];
+
+    const shiftClasses = classes.filter(cls => getClassShift(cls) === targetShift)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+    if (shiftClasses.length === 0) {
+      alert('Nenhuma turma encontrada para o turno.');
+      return;
+    }
+
+    const blocks = targetShift === 'vespertino' ? defaultAfternoonBlocks : defaultMorningBlocks;
+    const shiftTitle = targetShift === 'matutino' ? 'MATUTINO' : 'VESPERTINO';
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(`Grade Vazia / Visão Geral - Turno ${shiftTitle} (6º ao 8º Ano s/ último horário Seg/Qua/Sex)`, 8, 8);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Segunda, Quarta e Sexta: Turmas de 6º a 8º ano sem aula no último horário`, 8, 11.5);
+
+    const headers = ['DIA', 'HORÁRIO', ...shiftClasses.map(c => c.name.toUpperCase())];
+    const body: string[][] = [];
+    const nonIntervalBlocks = blocks.filter(b => !b.is_interval);
+
+    daysOfWeek.forEach(dayKey => {
+      blocks.forEach((block) => {
+        const row: string[] = [];
+        row.push(dayLabels[dayKey]);
+        row.push(block.is_interval ? `RECREIO` : `${block.label} (${block.start_time}-${block.end_time})`);
+
+        const isRestrictedDay = dayKey === 'segunda' || dayKey === 'quarta' || dayKey === 'sexta';
+        const nonIntervalIdx = nonIntervalBlocks.findIndex(b => b.start_time === block.start_time);
+        const isLastSlot = nonIntervalIdx >= 5;
+
+        shiftClasses.forEach(cls => {
+          if (block.is_interval) {
+            row.push('☕ RECREIO');
+          } else {
+            const isClass678 = is678Grade(cls.name);
+            if (isClass678 && isRestrictedDay && isLastSlot) {
+              row.push('---');
+            } else {
+              row.push('');
+            }
+          }
+        });
+        body.push(row);
+      });
+    });
+
+    const numCols = headers.length;
+    let fontSize = 6.5;
+    if (numCols > 12) fontSize = 5;
+    else if (numCols > 9) fontSize = 5.5;
+
+    autoTable(doc, {
+      startY: 13,
+      head: [headers],
+      body: body,
+      theme: 'grid',
+      headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', cellPadding: 0.6 },
+      styles: { fontSize, halign: 'center', valign: 'middle', cellPadding: 0.5, overflow: 'ellipsize', minCellHeight: 3.5 },
+      columnStyles: {
+        0: { fontStyle: 'bold', halign: 'center', cellWidth: 16, fillColor: [241, 245, 249] },
+        1: { fontStyle: 'bold', halign: 'center', cellWidth: 26, fillColor: [248, 250, 252] }
+      },
+      margin: { left: 6, right: 6, top: 4, bottom: 4 }
+    });
+
+    doc.save(`grade_vazia_${targetShift}_6o_a_8o.pdf`);
   };
 
   const exportMatrixPDF = (targetShift: 'matutino' | 'vespertino' | 'ambos') => {
@@ -4146,12 +4287,42 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 </div>
               </div>
 
+              {/* GRADE VAZIA / VISÃO GERAL SEM AULAS (6º AO 8º ANO) */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                <p className="text-[11px] font-bold uppercase text-slate-800 tracking-wider flex items-center gap-1">
+                  <span>📭</span> Grade Vazia / Visão Geral sem Aulas (6º ao 8º Ano)
+                </p>
+                <div className="grid grid-cols-1 gap-1.5">
+                  <button
+                    onClick={() => exportEmptyMatrixWithRulesPDF('matutino')}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-indigo-600 hover:bg-indigo-50/50 transition-all group"
+                  >
+                    <p className="font-bold text-xs text-slate-800 group-hover:text-indigo-700">☀️ Grade Vazia - Matutino (Seg/Qua/Sex s/ último horário)</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Matriz em branco para preenchimento, respeitando regra do 6º ao 8º ano.</p>
+                  </button>
+                  <button
+                    onClick={() => exportEmptyMatrixWithRulesPDF('vespertino')}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-indigo-600 hover:bg-indigo-50/50 transition-all group"
+                  >
+                    <p className="font-bold text-xs text-slate-800 group-hover:text-indigo-700">🌙 Grade Vazia - Vespertino (Seg/Qua/Sex s/ último horário)</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Matriz em branco para preenchimento, respeitando regra do 6º ao 8º ano.</p>
+                  </button>
+                </div>
+              </div>
+
               {/* RELATÓRIOS INDIVIDUAIS POR TURMA E PROFESSOR */}
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
                 <p className="text-[11px] font-bold uppercase text-slate-800 tracking-wider flex items-center gap-1">
-                  <span>📑</span> Relatórios Individuais (Com Professores)
+                  <span>📑</span> Relatórios Individuais & Carga Horária
                 </p>
                 <div className="grid grid-cols-1 gap-1.5">
+                  <button
+                    onClick={exportSubjectWorkloadsPDF}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:border-slate-800 hover:bg-slate-100 transition-all group"
+                  >
+                    <p className="font-bold text-xs text-slate-800 group-hover:text-red-600">📋 Baixar Carga Horária das Disciplinas (Turmas)</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Relatório PDF com a carga horária de cada disciplina por turma.</p>
+                  </button>
                   {selectedClassId && (
                     <button
                       onClick={exportPDFCurrentClass}
