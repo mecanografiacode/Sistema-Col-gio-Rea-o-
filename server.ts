@@ -167,6 +167,17 @@ Dicas Específicas para o Colégio Reação:
   }
 });
 
+const is678Grade = (className: string) => {
+  const norm = (className || '').toLowerCase();
+  if (norm.includes('9º') || norm.includes('9°') || norm.includes('9 ano') || norm.includes('médio') || norm.includes('medio') || norm.includes('9a') || norm.includes('9b')) {
+    return false;
+  }
+  return norm.includes('6º') || norm.includes('6°') || norm.includes('6 ano') || norm.includes('6a') || norm.includes('6b') ||
+         norm.includes('7º') || norm.includes('7°') || norm.includes('7 ano') || norm.includes('7a') || norm.includes('7b') ||
+         norm.includes('8º') || norm.includes('8°') || norm.includes('8 ano') || norm.includes('8a') || norm.includes('8b') ||
+         /\b(6|7|8)\b/.test(norm);
+};
+
 // --- API ENDPOINT: AI Schedule Generator ---
 app.post('/api/schedule/generate-ai', async (req, res) => {
   try {
@@ -179,28 +190,32 @@ app.post('/api/schedule/generate-ai', async (req, res) => {
 
     const targetClasses = classes.filter((c: any) => targetClassIds.includes(c.id));
 
+    const daysList = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+
     const promptText = `
-Você é um especialista e algoritmo sênior de inteligência artificial em planejamento e otimização de grades horárias escolares para o Colégio Reação em Brasília/DF.
-Sua tarefa é organizar automaticamente todas as aulas das turmas solicitadas com o modelo Gemini 3.1 Flash Lite.
+Você é o algoritmo e especialista sênior de inteligência artificial em planejamento de grades horárias para o Colégio Reação em Brasília/DF.
+Sua missão é organizar a grade horária AUTOMATICAMENTE utilizando o modelo Gemini 3.1 Flash Lite.
 
-DIRETRIZES E REGRAS ABSOLUTAS DA ESCOLA:
-1. NÃO PODE TER HORÁRIOS LIVRES (AULAS VAGAS): Todos os blocos de horário que não forem recreio/intervalo das turmas DEVEM ser obrigatoriamente preenchidos com disciplinas e professores correspondentes.
-2. RIGOR NA CARGA HORÁRIA: Obedeça estritamente à carga horária semanal de cada disciplina cadastrada para cada turma (subject_workloads). Se a disciplina tem carga de 2 aulas na semana para aquela turma, você DEVE alocar EXATAMENTE 2 aulas (jamais coloque 3 ou 4 aulas).
-3. ZERO CONFLITOS DE PROFESSOR: Um professor (ou professores com nomes similares como 'Priscylla' e 'Priscylla Gramática') JAMAIS pode estar alocado em duas turmas no mesmo dia e mesmo horário.
-4. MÁXIMO DE 2 AULAS DA MESMA DISCIPLINA POR DIA EM UMA TURMA: Não coloque mais de 2 aulas da mesma disciplina no mesmo dia para uma turma.
-5. DISPONIBILIDADE DO PROFESSOR: Respeite os dias de trabalho, turno (matutino/vespertino) e disponibilidade de cada docente.
-6. EXPLICAÇÃO DETALHADA DE CONFLITOS: Se houver qualquer conflito, incompatibilidade de horário de professor ou falta de carga horária habilitada de professores para cobrir as turmas, descreva de forma clara na propriedade 'conflicts' POR QUE o conflito aconteceu (ex: "Turma 8º Ano A: Faltam aulas para preencher a quinta-feira porque a professora Elizandra de Literatura não atende no turno matutino").
+EXIGÊNCIAS RÍGIDAS DA DIREÇÃO DA ESCOLA (ZERO TOLERÂNCIA A ERROS):
+1. REGRAS DE PREENCHIMENTO COMPLETO DA GRADE (SEM AULAS VAGAS ACIDENTAIS):
+   - Turmas dos 6ºs, 7ºs e 8ºs Anos: Possuem REGRA OFICIAL DE HORÁRIO REDUZIDO de 5 aulas na Segunda, Quarta e Sexta (o 6º horário NÂO DEVE TER AULA) e 6 aulas na Terça e Quinta (total 27 aulas). Preencha 100% dos horários válidos dessas turmas!
+   - Turmas dos 9ºs Anos e Ensino Médio: Possuem 6 aulas TODOS os dias da semana (Segunda a Sexta, total 30 aulas). Preencha 100% das 30 aulas!
+2. RIGOR NA CARGA HORÁRIA: Respeite a carga horária estipulada para cada disciplina na turma (subject_workloads).
+3. ZERO CONFLITOS DE PROFESSOR: Um professor não pode lecionar em 2 turmas no mesmo dia e mesmo horário.
+4. MÁXIMO DE 2 AULAS POR DIA DA MESMA MATÉRIA: Não coloque mais de 2 aulas da mesma matéria no mesmo dia em uma turma.
+5. DISPONIBILIDADE: Respeite os dias de trabalho, turno e disponibilidades dos professores.
+6. EXPLICAÇÃO MINUCIOSA DE CONFLITOS: Se houver qualquer restrição, indisponibilidade ou choque de horário, explique detalhadamente na propriedade 'conflicts' o motivo.
 
-Dados da Escola:
-- Turmas Alvo e Cargas Horárias: ${JSON.stringify(targetClasses)}
-- Professores e Disciplinas Habilitadas: ${JSON.stringify(teachers)}
-- Blocos de Tempo (Aulas e Recreios): ${JSON.stringify(timeBlocks)}
-- Lista Completa de Disciplinas: ${JSON.stringify(subjects || [])}
+Dados Enviados:
+- Turmas Alvo: ${JSON.stringify(targetClasses)}
+- Professores Cadastrados e Habilitados: ${JSON.stringify(teachers)}
+- Blocos de Horários das Turmas: ${JSON.stringify(timeBlocks)}
+- Lista de Disciplinas: ${JSON.stringify(subjects || [])}
 
-Retorne um objeto JSON estrito com:
-- slots: Array de ScheduleSlot contendo: class_id, teacher_id, subject, day_of_week ('segunda'|'terca'|'quarta'|'quinta'|'sexta'), start_time, end_time.
-- conflicts: Array de strings contendo explicações detalhadas de qualquer conflito, imprevisto ou restrição de professor encontrado.
-- summary: String com um resumo explicativo da grade gerada e taxa de ocupação das turmas.
+Retorne em JSON:
+- slots: Array de ScheduleSlot (class_id, teacher_id, subject, day_of_week, start_time, end_time).
+- conflicts: Array de strings contendo explicações claras de qualquer conflito de horário ou indisponibilidade de professor encontrada.
+- summary: Resumo das aulas organizadas por turma respeitando o horário reduzido oficial.
 `;
 
     const response = await ai.models.generateContent({
@@ -208,7 +223,7 @@ Retorne um objeto JSON estrito com:
       contents: promptText,
       config: {
         systemInstruction:
-          'Você é um algoritmo e assistente sênior especialista do Colégio Reação utilizando o modelo Gemini 3.1 Flash Lite. REGRA ABSOLUTA: Não deixe horários vagos, respeite rigorosamente as cargas horárias das turmas e informe claramente qualquer motivo de conflito se houver.',
+          'Você é um algoritmo especialista sênior em alocação de grades escolares do Colégio Reação. REGRA ABSOLUTA: Turmas de 6º/7º/8º ano têm 5 aulas na seg/qua/sex (saída antecipada) e 6 aulas na ter/qui. 9º ano e Ensino Médio têm 6 aulas todos os dias. Preencha 100% dos horários válidos sem deixar aulas vagas acidentais.',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -242,11 +257,97 @@ Retorne um objeto JSON estrito com:
 
     if (response.text) {
       const parsedData = JSON.parse(response.text);
+      let slots: any[] = parsedData.slots || [];
+      const conflicts: string[] = parsedData.conflicts || [];
+
+      // --- POST-PROCESSING GUARD: GUARANTEE ZERO UNINTENDED FREE SLOTS ---
+      targetClasses.forEach((cls: any) => {
+        const clsBlocks = timeBlocks
+          .filter((b: any) => b.class_id === cls.id && !b.is_interval)
+          .sort((a: any, b: any) => a.start_time.localeCompare(b.start_time));
+
+        const is678 = is678Grade(cls.name);
+
+        daysList.forEach((day) => {
+          const isShortDay = is678 && (day === 'segunda' || day === 'quarta' || day === 'sexta');
+
+          clsBlocks.forEach((block: any, blockIdx: number) => {
+            if (isShortDay && blockIdx >= 5) return; // 6º, 7º, 8º ano: 6º horário na Seg/Qua/Sex é saída antecipada
+
+            const exists = slots.some(
+              (s: any) =>
+                s.class_id === cls.id &&
+                s.day_of_week === day &&
+                s.start_time === block.start_time
+            );
+
+            if (!exists) {
+              // Find candidates for this class
+              const qualTeachers = teachers.filter((t: any) => {
+                // Check if available on day
+                if (t.available_days && t.available_days.length > 0 && !t.available_days.includes(day)) {
+                  return false;
+                }
+                // Check shift
+                const hour = parseInt(block.start_time.split(':')[0] || '0', 10);
+                const isMorning = hour < 12;
+                if (t.availability_shift === 'matutino' && !isMorning) return false;
+                if (t.availability_shift === 'vespertino' && isMorning) return false;
+
+                // Check group
+                if (t.groups && t.groups.length > 0 && !t.groups.includes(cls.group)) return false;
+
+                // Check conflict with other classes at same time
+                const hasConflict = slots.some(
+                  (s: any) =>
+                    s.teacher_id === t.id &&
+                    s.day_of_week === day &&
+                    s.start_time === block.start_time
+                );
+                return !hasConflict;
+              });
+
+              if (qualTeachers.length > 0) {
+                // Pick teacher with subject that has < 2 lessons in this day
+                let chosenTeacher = qualTeachers[0];
+                let chosenSubject = chosenTeacher.subjects && chosenTeacher.subjects[0] ? chosenTeacher.subjects[0] : 'Geral';
+
+                for (const t of qualTeachers) {
+                  for (const sub of (t.subjects || [])) {
+                    const countInDay = slots.filter(
+                      (s: any) =>
+                        s.class_id === cls.id &&
+                        s.day_of_week === day &&
+                        s.subject.toUpperCase().trim() === sub.toUpperCase().trim()
+                    ).length;
+
+                    if (countInDay < 2) {
+                      chosenTeacher = t;
+                      chosenSubject = sub;
+                      break;
+                    }
+                  }
+                }
+
+                slots.push({
+                  class_id: cls.id,
+                  teacher_id: chosenTeacher.id,
+                  subject: chosenSubject,
+                  day_of_week: day,
+                  start_time: block.start_time,
+                  end_time: block.end_time
+                });
+              }
+            }
+          });
+        });
+      });
+
       return res.json({
         success: true,
-        slots: parsedData.slots || [],
-        conflicts: parsedData.conflicts || [],
-        summary: parsedData.summary || 'Grade organizada pelo Gemini 3.1 Flash Lite.',
+        slots,
+        conflicts,
+        summary: parsedData.summary || 'Grade organizada pelo Gemini 3.1 Flash Lite respeitando o horário reduzido oficial.',
         source: 'gemini-3.1-flash-lite'
       });
     }

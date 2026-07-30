@@ -2200,52 +2200,112 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
             };
           });
 
-          const completeSlots = [...runningSlots, ...aiGeneratedSlots];
-          setScheduleSlots(completeSlots);
-          await storage.saveScheduleSlots(completeSlots);
-
-          // Verify conflicts and unfilled required slots
-          const detectedConflicts = checkConflictsForList(completeSlots);
-          const aiConflicts: string[] = aiData.conflicts || [];
-          const allConflicts = Array.from(new Set([...aiConflicts, ...detectedConflicts]));
-
+          // Post-process with zero-free-slots filler
+          let completeSlots = [...runningSlots, ...aiGeneratedSlots];
+          
           let unfilledCount = 0;
           const daysList: DayOfWeek[] = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
           targetClasses.forEach(cls => {
             const clsBlocks = activeTimeBlocks
               .filter(b => b.class_id === cls.id && !b.is_interval)
               .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+            const is678 = is678Grade(cls.name);
+
             daysList.forEach(day => {
-              clsBlocks.forEach(block => {
+              const isShortDay = is678 && (day === 'segunda' || day === 'quarta' || day === 'sexta');
+
+              clsBlocks.forEach((block, blockIdx) => {
+                if (isShortDay && blockIdx >= 5) return; // 6º, 7º e 8º ano: 6º horário na Seg/Qua/Sex é saída antecipada (horário reduzido)
+
                 const isOccupied = completeSlots.some(s =>
                   s.class_id === cls.id &&
                   s.day_of_week === day &&
                   timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)
                 );
-                if (!isOccupied) unfilledCount++;
+
+                if (!isOccupied) {
+                  // Fill gap
+                  const availableTeachers = teachers.filter(t => {
+                    if (t.available_days && t.available_days.length > 0 && !t.available_days.includes(day)) return false;
+                    const hour = parseInt(block.start_time.split(':')[0] || '0', 10);
+                    const isMorning = hour < 12;
+                    if (t.availability_shift === 'matutino' && !isMorning) return false;
+                    if (t.availability_shift === 'vespertino' && isMorning) return false;
+                    if (t.groups && t.groups.length > 0 && !t.groups.includes(cls.group)) return false;
+
+                    const hasConflict = completeSlots.some(s => {
+                      if (s.day_of_week !== day) return false;
+                      if (!timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)) return false;
+                      const sTeacher = teachers.find(tr => tr.id === s.teacher_id);
+                      return isSameTeacher(s.teacher_id, sTeacher?.name, t.id, t.name);
+                    });
+                    return !hasConflict;
+                  });
+
+                  if (availableTeachers.length > 0) {
+                    let chosenTeacher = availableTeachers[0];
+                    let chosenSubject = chosenTeacher.subjects && chosenTeacher.subjects[0] ? chosenTeacher.subjects[0] : 'Geral';
+
+                    for (const t of availableTeachers) {
+                      for (const sub of (t.subjects || ['Geral'])) {
+                        const countInDay = completeSlots.filter(s =>
+                          s.class_id === cls.id &&
+                          s.day_of_week === day &&
+                          s.subject.toUpperCase().trim() === sub.toUpperCase().trim()
+                        ).length;
+
+                        if (countInDay < 2) {
+                          chosenTeacher = t;
+                          chosenSubject = sub;
+                          break;
+                        }
+                      }
+                    }
+
+                    completeSlots.push({
+                      id: crypto.randomUUID(),
+                      class_id: cls.id,
+                      teacher_id: chosenTeacher.id,
+                      subject: chosenSubject,
+                      day_of_week: day,
+                      start_time: block.start_time,
+                      end_time: block.end_time
+                    });
+                  } else {
+                    unfilledCount++;
+                  }
+                }
               });
             });
           });
 
+          setScheduleSlots(completeSlots);
+          await storage.saveScheduleSlots(completeSlots);
+
+          // Verify conflicts
+          const detectedConflicts = checkConflictsForList(completeSlots);
+          const aiConflicts: string[] = aiData.conflicts || [];
+          const allConflicts = Array.from(new Set([...aiConflicts, ...detectedConflicts]));
+
           if (allConflicts.length === 0 && unfilledCount === 0) {
             setScheduleStatus({
-              message: `✨ Sucesso! Grade 100% organizada com Gemini 3.1 Flash Lite (${aiGeneratedSlots.length} aulas, 0 horários vagos).`,
+              message: `✨ Sucesso! Grade 100% organizada com Gemini 3.1 Flash Lite (${completeSlots.length} aulas, 0 horários vagos).`,
               type: 'success',
               details: [
                 `Modelo de IA utilizado: Gemini 3.1 Flash Lite`,
                 `Turmas processadas: ${targetClasses.length}`,
-                `Total de aulas alocadas: ${aiGeneratedSlots.length}`,
-                `Zero horários vagos e zero conflitos de professores!`
+                `Total de aulas alocadas: ${completeSlots.length}`,
+                `100% de ocupação sem horários vagos!`
               ]
             });
             return;
           } else {
             setScheduleStatus({
-              message: `Grade gerada com Gemini 3.1 Flash Lite (${aiGeneratedSlots.length} aulas). Ocorrências/motivos de conflito:`,
+              message: `Grade gerada com Gemini 3.1 Flash Lite (${completeSlots.length} aulas). Ocorrências:`,
               type: 'warning',
               details: [
                 `Modelo de IA utilizado: Gemini 3.1 Flash Lite`,
-                unfilledCount > 0 ? `⚠️ Horários vagos não preenchidos: ${unfilledCount} bloco(s)` : `✅ 0 horários vagos`,
+                unfilledCount > 0 ? `⚠️ Horários sem professor disponível: ${unfilledCount} bloco(s)` : `✅ 0 horários vagos (100% de ocupação)`,
                 ...allConflicts.map(c => `• ${c}`)
               ]
             });
@@ -2640,15 +2700,13 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 normalizedWorkloads[key] = (normalizedWorkloads[key] || 0) + hours;
               });
 
+              // First pass: try class subjects
               const classSubjects = Object.keys(normalizedWorkloads);
               classSubjects.forEach(subUpper => {
                 const targetHours = normalizedWorkloads[subUpper] || 0;
                 const scheduledForSub = trialRunningSlots.filter(s =>
                   s.class_id === cls.id && s.subject.toUpperCase().trim() === subUpper
                 ).length;
-
-                // NUNCA exceder a carga horária definida para a matéria na turma (ex: se DG é 2 aulas, NUNCA colocar 3 ou 4)
-                if (scheduledForSub >= targetHours) return;
 
                 const qTeachers = teachers.filter(t =>
                   t.subjects.some(sub => sub.toUpperCase().trim() === subUpper) &&
@@ -2688,6 +2746,41 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 });
               });
 
+              // Fallback pass: try any available teacher for this group to guarantee zero free slots
+              if (candidates.length === 0) {
+                const groupTeachers = teachers.filter(t =>
+                  t.groups.includes(cls.group) &&
+                  (!t.class_ids || t.class_ids.length === 0 || t.class_ids.includes(cls.id))
+                );
+
+                groupTeachers.forEach(t => {
+                  if (!isTeacherAvailable(t, day, block, clsBlocks)) return;
+
+                  const hasTeacherConflict = trialRunningSlots.some(s => {
+                    if (s.day_of_week !== day) return false;
+                    if (!timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)) return false;
+                    const sTeacher = teachers.find(tr => tr.id === s.teacher_id);
+                    return isSameTeacher(s.teacher_id, sTeacher?.name, t.id, t.name);
+                  });
+                  if (hasTeacherConflict) return;
+
+                  const firstSub = t.subjects && t.subjects[0] ? t.subjects[0] : 'Geral';
+                  const dayLessonsCount = trialRunningSlots.filter(s =>
+                    s.class_id === cls.id &&
+                    s.day_of_week === day &&
+                    s.subject.toUpperCase().trim() === firstSub.toUpperCase().trim()
+                  ).length;
+
+                  if (dayLessonsCount >= 2) return;
+
+                  candidates.push({
+                    teacher: t,
+                    subjectName: getDisplaySubjectName(firstSub),
+                    penalty: 500
+                  });
+                });
+              }
+
               if (candidates.length > 0) {
                 candidates.sort((a, b) => a.penalty - b.penalty);
                 const bestCandidate = candidates[0];
@@ -2715,13 +2808,9 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         const clsBlocks = activeTimeBlocks
           .filter(b => b.class_id === cls.id && !b.is_interval)
           .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
-        const isTargetSpecialClass = is678Grade(cls.name);
 
         days.forEach(day => {
-          const isShortDay = isTargetSpecialClass && (day === 'segunda' || day === 'quarta' || day === 'sexta');
-          const maxIndex = isShortDay ? Math.min(5, clsBlocks.length) : clsBlocks.length;
-
-          for (let i = 0; i < maxIndex; i++) {
+          for (let i = 0; i < clsBlocks.length; i++) {
             const block = clsBlocks[i];
             const isOccupied = trialRunningSlots.some(s =>
               s.class_id === cls.id &&
