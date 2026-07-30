@@ -186,6 +186,44 @@ const timeToMinutes = (timeStr: string): number => {
   return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
 };
 
+const normalizeSubjectName = (s: string): string => {
+  if (!s) return '';
+  const clean = s.trim().toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "");
+  
+  if (clean === 'dg' || clean === 'desenhogeometrico' || clean === 'desenhogeometria' || clean === 'desgeometria') return 'dg';
+  if (clean === 'edfisica' || clean === 'educacaofisica' || clean === 'edfis' || clean === 'educacaofis') return 'edfisica';
+  if (clean === 'portugues' || clean === 'linguaportuguesa' || clean === 'port' || clean === 'lportuguesa') return 'portugues';
+  if (clean === 'matematica' || clean === 'mat') return 'matematica';
+  if (clean === 'historia' || clean === 'hist') return 'historia';
+  if (clean === 'geografia' || clean === 'geo') return 'geografia';
+  if (clean === 'ciencias' || clean === 'cien') return 'ciencias';
+  if (clean === 'biologia' || clean === 'bio') return 'biologia';
+  if (clean === 'fisica' || clean === 'fis') return 'fisica';
+  if (clean === 'quimica' || clean === 'quim') return 'quimica';
+  if (clean === 'artes' || clean === 'arte') return 'artes';
+  if (clean === 'ingles' || clean === 'linguainglesa' || clean === 'linginglesa') return 'ingles';
+  if (clean === 'espanhol' || clean === 'linguaespanhola' || clean === 'lingespanhola') return 'espanhol';
+  if (clean === 'filosofia' || clean === 'filo') return 'filosofia';
+  if (clean === 'sociologia' || clean === 'soc') return 'sociologia';
+  if (clean === 'redacao' || clean === 'producaodetexto' || clean === 'prod' || clean === 'prodtexto') return 'redacao';
+  return clean;
+};
+
+const isSameSubject = (s1?: string, s2?: string): boolean => {
+  if (!s1 || !s2) return false;
+  return normalizeSubjectName(s1) === normalizeSubjectName(s2);
+};
+
+const countWeeklySlotsForSubject = (classId: string, subject: string, slotsList: any[]): number => {
+  return slotsList.filter((s: any) => s.class_id === classId && isSameSubject(s.subject, subject)).length;
+};
+
+const countDaySlotsForSubject = (classId: string, day: string, subject: string, slotsList: any[]): number => {
+  return slotsList.filter((s: any) => s.class_id === classId && s.day_of_week === day && isSameSubject(s.subject, subject)).length;
+};
+
 const getNormalizedTeacherFirstName = (name?: string): string => {
   if (!name) return '';
   const clean = name.trim().toLowerCase()
@@ -223,7 +261,6 @@ const makeDoubleLessonsConsecutive = (
 ): any[] => {
   let slots = [...inputSlots];
   const daysList = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
-  const normSub = (s: string) => (s || '').trim().toUpperCase();
 
   targetClasses.forEach((cls: any) => {
     const clsBlocks = timeBlocks
@@ -232,16 +269,16 @@ const makeDoubleLessonsConsecutive = (
 
     daysList.forEach((day) => {
       // Find subjects that have 2 lessons on this day for this class
-      const subjectSlotsMap: { [sub: string]: any[] } = {};
+      const subjectSlotsMap: { [subKey: string]: any[] } = {};
       slots.forEach((s: any) => {
         if (s.class_id === cls.id && s.day_of_week === day) {
-          const sub = normSub(s.subject);
-          if (!subjectSlotsMap[sub]) subjectSlotsMap[sub] = [];
-          subjectSlotsMap[sub].push(s);
+          const subKey = normalizeSubjectName(s.subject);
+          if (!subjectSlotsMap[subKey]) subjectSlotsMap[subKey] = [];
+          subjectSlotsMap[subKey].push(s);
         }
       });
 
-      Object.entries(subjectSlotsMap).forEach(([_sub, subSlots]) => {
+      Object.entries(subjectSlotsMap).forEach(([_subKey, subSlots]) => {
         if (subSlots.length !== 2) return;
 
         const getBlockIdx = (s: any) =>
@@ -497,12 +534,6 @@ Retorne em JSON:
 
         const is678 = is678Grade(cls.name);
         const workloads = cls.subject_workloads || {};
-        const normWorkloads: { [key: string]: number } = {};
-        Object.entries(workloads).forEach(([s, h]: [string, any]) => {
-          if (s && typeof h === 'number' && h > 0) {
-            normWorkloads[normSub(s)] = h;
-          }
-        });
 
         daysList.forEach((day) => {
           const isShortDay = is678 && (day === 'segunda' || day === 'quarta' || day === 'sexta');
@@ -523,8 +554,8 @@ Retorne em JSON:
                 if (t.available_days && t.available_days.length > 0 && !t.available_days.includes(day)) {
                   return false;
                 }
-                const hour = parseInt(block.start_time.split(':')[0] || '0', 10);
-                const isMorning = hour < 12;
+                const startMin = timeToMinutes(block.start_time);
+                const isMorning = startMin < 780; // Before 13:00 (1:00 PM) is morning shift
                 if (t.availability_shift === 'matutino' && !isMorning) return false;
                 if (t.availability_shift === 'vespertino' && isMorning) return false;
 
@@ -542,12 +573,17 @@ Retorne em JSON:
               const groupTeachers = qualTeachers.filter((t: any) => !t.groups || t.groups.length === 0 || t.groups.includes(cls.group));
               for (const t of groupTeachers) {
                 for (const sub of (t.subjects || ['Geral'])) {
-                  const subUpper = normSub(sub);
-                  const targetH = normWorkloads[subUpper] || 0;
-                  const currentWeekly = slots.filter((s: any) => s.class_id === cls.id && normSub(s.subject) === subUpper).length;
+                  let targetH = 0;
+                  for (const [wSub, h] of Object.entries(workloads)) {
+                    if (isSameSubject(wSub, sub) && typeof h === 'number') {
+                      targetH = h;
+                      break;
+                    }
+                  }
+                  const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
 
                   if (targetH > 0 && currentWeekly < targetH) {
-                    const countInDay = slots.filter((s: any) => s.class_id === cls.id && s.day_of_week === day && normSub(s.subject) === subUpper).length;
+                    const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
                     if (countInDay < 2) {
                       chosen = { teacher: t, subject: sub };
                       break;
@@ -561,13 +597,18 @@ Retorne em JSON:
               if (!chosen) {
                 for (const t of groupTeachers) {
                   for (const sub of (t.subjects || ['Geral'])) {
-                    const subUpper = normSub(sub);
-                    const targetH = normWorkloads[subUpper] || 0;
-                    const currentWeekly = slots.filter((s: any) => s.class_id === cls.id && normSub(s.subject) === subUpper).length;
+                    let targetH = 0;
+                    for (const [wSub, h] of Object.entries(workloads)) {
+                      if (isSameSubject(wSub, sub) && typeof h === 'number') {
+                        targetH = h;
+                        break;
+                      }
+                    }
+                    const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
 
                     if (targetH > 0 && targetH <= 2 && currentWeekly >= targetH) continue; // Capped
 
-                    const countInDay = slots.filter((s: any) => s.class_id === cls.id && s.day_of_week === day && normSub(s.subject) === subUpper).length;
+                    const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
                     if (countInDay < 2) {
                       chosen = { teacher: t, subject: sub };
                       break;
@@ -581,19 +622,50 @@ Retorne em JSON:
               if (!chosen) {
                 for (const t of qualTeachers) {
                   for (const sub of (t.subjects || ['Geral'])) {
-                    const subUpper = normSub(sub);
-                    const targetH = normWorkloads[subUpper] || 0;
-                    const currentWeekly = slots.filter((s: any) => s.class_id === cls.id && normSub(s.subject) === subUpper).length;
+                    let targetH = 0;
+                    for (const [wSub, h] of Object.entries(workloads)) {
+                      if (isSameSubject(wSub, sub) && typeof h === 'number') {
+                        targetH = h;
+                        break;
+                      }
+                    }
+                    const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
 
                     if (targetH > 0 && targetH <= 2 && currentWeekly >= targetH) continue; // Capped
 
-                    const countInDay = slots.filter((s: any) => s.class_id === cls.id && s.day_of_week === day && normSub(s.subject) === subUpper).length;
+                    const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
                     if (countInDay < 2) {
                       chosen = { teacher: t, subject: sub };
                       break;
                     }
                   }
                   if (chosen) break;
+                }
+              }
+
+              // Tier 4: Fallback - pick any subject in workloads that needs weekly hours
+              if (!chosen) {
+                for (const [wSub, h] of Object.entries(workloads)) {
+                  if (typeof h !== 'number' || h <= 0) continue;
+                  const currentWeekly = countWeeklySlotsForSubject(cls.id, wSub, slots);
+                  if (currentWeekly < h) {
+                    const matchingTeacher = qualTeachers.find((t: any) =>
+                      (t.subjects || []).some((ts: string) => isSameSubject(ts, wSub))
+                    );
+                    if (matchingTeacher) {
+                      chosen = { teacher: matchingTeacher, subject: wSub };
+                      break;
+                    }
+                  }
+                }
+              }
+
+              // Tier 5: Absolute Fallback - pick any teacher without time conflict
+              if (!chosen) {
+                for (const t of qualTeachers) {
+                  const sub = (t.subjects && t.subjects[0]) || 'Geral';
+                  chosen = { teacher: t, subject: sub };
+                  break;
                 }
               }
 
