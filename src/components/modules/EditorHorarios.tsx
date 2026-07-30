@@ -2596,13 +2596,20 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
     await storage.saveTimeBlocks(activeTimeBlocks);
 
     setScheduleStatus({
-      message: '⚙️ Executando Algoritmo CSP Profissional (Backtracking & Forward Checking)...',
+      message: '⚙️ Iniciando Motor CSP Profissional (0%)...',
       type: 'warning',
-      details: ['Calculando métricas de professores, ordem de disciplinas e restrições rígidas...']
+      details: ['Inicializando motor de otimização assíncrono...']
     });
 
     const solver = new HorarioCSPSolver(teachers, targetClasses, subjects, activeTimeBlocks);
-    const result = solver.solve();
+    const result = await solver.solveAsync(async (progress, message) => {
+      setScheduleStatus({
+        message: `⚙️ ${message} (${progress}%)`,
+        type: 'warning',
+        details: [`Progresso do motor CSP: ${progress}% concluído.`]
+      });
+      await new Promise(r => setTimeout(r, 10));
+    });
 
     const cspFinalSlots = [...runningSlots, ...result.slots];
     setScheduleSlots(cspFinalSlots);
@@ -2610,13 +2617,13 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
 
     if (result.success && result.stats.unfilledSlots === 0) {
       setScheduleStatus({
-        message: `✨ Sucesso! Grade horária gerada pelo Algoritmo CSP (${result.stats.filledSlots} aulas alocadas, 0 conflitos).`,
+        message: `✨ Sucesso! Grade gerada pelo Motor CSP (${result.stats.filledSlots} aulas, 0 conflitos).`,
         type: 'success',
         details: [
           `Turmas processadas: ${targetClasses.length}`,
-          `Total de aulas alocadas: ${result.stats.filledSlots}`,
+          `Total alocado: ${result.stats.filledSlots} aulas`,
           `100% de ocupação sem horários vagos e máx 2 aulas/dia por matéria!`,
-          `Recurso da Profa. Gilva respeitado (Matemática e DG tratados como unificados).`
+          `Recurso da Profa. Gilva respeitado (Matemática e DG unificados).`
         ]
       });
     } else {
@@ -2625,11 +2632,12 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         type: result.stats.unfilledSlots === 0 ? 'success' : 'warning',
         details: [
           `Turmas processadas: ${targetClasses.length}`,
-          result.stats.unfilledSlots > 0 ? `⚠️ Aulas não alocadas / vagas: ${result.stats.unfilledSlots}` : `✅ 100% de ocupação`,
-          ...result.conflicts.map(c => `• ${c}`)
+          result.stats.unfilledSlots > 0 ? `⚠️ Aulas vagas/não alocadas: ${result.stats.unfilledSlots}` : `✅ 100% de ocupação`,
+          ...result.conflicts.map((c: string) => `• ${c}`)
         ]
       });
     }
+
     return;
 
     try {
