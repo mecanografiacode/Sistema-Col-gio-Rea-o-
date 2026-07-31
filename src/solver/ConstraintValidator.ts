@@ -70,16 +70,18 @@ export class ConstraintValidator {
     }
 
     const workloads = cls.subject_workloads || {};
-    let targetWorkload = 0;
-    for (const [sub, h] of Object.entries(workloads)) {
-      if (sub.toLowerCase() === candidate.subject.toLowerCase() && typeof h === 'number') {
-        targetWorkload = h;
-        break;
+    if (Object.keys(workloads).length > 0) {
+      let targetWorkload = 0;
+      for (const [sub, h] of Object.entries(workloads)) {
+        if (sub.toLowerCase() === candidate.subject.toLowerCase() && typeof h === 'number') {
+          targetWorkload = h;
+          break;
+        }
       }
-    }
-    const currentWeekly = currentSlots.filter(s => s.class_id === cls.id && s.subject.toLowerCase() === candidate.subject.toLowerCase()).length;
-    if (targetWorkload > 0 && currentWeekly >= targetWorkload) {
-      return { isValid: false, reason: 'Carga horária semanal da disciplina na turma já preenchida.' };
+      const currentWeekly = currentSlots.filter(s => s.class_id === cls.id && s.subject.toLowerCase() === candidate.subject.toLowerCase()).length;
+      if (targetWorkload === 0 || currentWeekly >= targetWorkload) {
+        return { isValid: false, reason: 'Carga horária semanal da disciplina na turma já preenchida ou disciplina não vinculada à turma.' };
+      }
     }
 
     return { isValid: true };

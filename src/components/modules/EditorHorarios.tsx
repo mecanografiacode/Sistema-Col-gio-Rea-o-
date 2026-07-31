@@ -2296,7 +2296,80 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
               }
             }
 
-            // NOTE: WE DO NOT FORCE ANY OVER-WORKLOAD OR UNQUALIFIED ASSIGNMENTS
+            // Priority 4: GUARANTEE ZERO AULAS LIVRES - Relax teacher availability to find a teacher with no time collision in another class
+            if (!chosen) {
+              const teachersWithoutConflict = teachersList.filter(t => {
+                const hasConflict = slots.some(s => {
+                  if (s.day_of_week !== day) return false;
+                  if (!timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)) return false;
+                  const sTeacher = teachersList.find(tr => tr.id === s.teacher_id);
+                  return isSameTeacher(s.teacher_id, sTeacher?.name, t.id, t.name);
+                });
+                return !hasConflict;
+              });
+
+              // 4a. Try subjects needing workload using teachers without time conflict
+              for (const [wSub, h] of Object.entries(workloads || {})) {
+                if (typeof h !== 'number' || h <= 0) continue;
+                const currentWeekly = countWeeklySlotsForSubject(cls.id, wSub, slots);
+                if (currentWeekly < h) {
+                  const matchingTeacher = teachersWithoutConflict.find(t =>
+                    (t.subjects || []).some(ts => isSameSubject(ts, wSub))
+                  );
+                  if (matchingTeacher) {
+                    chosen = { teacher: matchingTeacher, subject: wSub };
+                    break;
+                  }
+                }
+              }
+
+              // 4b. Try any class subject needing workload using teachers without time conflict
+              if (!chosen) {
+                const sortedSubjects = Object.entries(workloads || {})
+                  .map(([wSub, h]) => ({
+                    subject: wSub,
+                    target: typeof h === 'number' ? h : 1,
+                    count: countWeeklySlotsForSubject(cls.id, wSub, slots)
+                  }))
+                  .filter(subItem => subItem.count < subItem.target)
+                  .sort((a, b) => (a.count / a.target) - (b.count / b.target));
+
+                for (const subItem of sortedSubjects) {
+                  const countInDay = countDaySlotsForSubject(cls.id, day, subItem.subject, slots);
+                  if (countInDay >= 2) continue;
+                  const matchingTeacher = teachersWithoutConflict.find(t =>
+                    (t.subjects || []).some(ts => isSameSubject(ts, subItem.subject))
+                  );
+                  if (matchingTeacher) {
+                    chosen = { teacher: matchingTeacher, subject: subItem.subject };
+                    break;
+                  }
+                }
+              }
+
+              // 4c. Any teacher in school without time conflict for subjects strictly under target workload
+              if (!chosen && teachersWithoutConflict.length > 0) {
+                for (const teacher of teachersWithoutConflict) {
+                  for (const sub of (teacher.subjects || [])) {
+                    let targetH = 0;
+                    for (const [wSub, h] of Object.entries(workloads || {})) {
+                      if (isSameSubject(wSub, sub) && typeof h === 'number') {
+                        targetH = h;
+                        break;
+                      }
+                    }
+                    const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
+                    const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
+                    if (targetH > 0 && currentWeekly < targetH && countInDay < 2) {
+                      chosen = { teacher, subject: sub };
+                      break;
+                    }
+                  }
+                  if (chosen) break;
+                }
+              }
+            }
+
             if (chosen) {
               slots.push({
                 id: crypto.randomUUID(),
@@ -2527,7 +2600,12 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
 
   // --- RESOLVE CONFLICTS AUTOMATICALLY ---
   const resolveConflictsAutomatically = async () => {
-    setScheduleStatus(null);
+    setScheduleStatus({
+      message: '🛠️ Reparando erros e preenchendo horários vagos de todas as turmas...',
+      type: 'warning',
+      details: ['Analisando professores, cargas horárias e alocando disciplinas sem aulas vagas...']
+    });
+    await new Promise(r => setTimeout(r, 100));
     await runAutoOrganize('all');
   };
 
@@ -3165,17 +3243,17 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                   });
                   if (hasTeacherConflict) return;
 
-                  // Find a subject from teacher that is NOT Espanhol or capped if already at target
-                  let suitableSub = t.subjects && t.subjects[0] ? t.subjects[0] : 'Geral';
-                  for (const sub of (t.subjects || ['Geral'])) {
+                  // Find a subject from teacher that strictly needs remaining workload
+                  let suitableSub: string | null = null;
+                  for (const sub of (t.subjects || [])) {
                     const subUpper = sub.toUpperCase().trim();
                     const targetHours = normalizedWorkloads[subUpper] || 0;
                     const currentAllocated = trialRunningSlots.filter(s =>
                       s.class_id === cls.id && s.subject.toUpperCase().trim() === subUpper
                     ).length;
 
-                    if (targetHours > 0 && targetHours <= 2 && currentAllocated >= targetHours) {
-                      continue; // Skip capped subjects like Espanhol
+                    if (targetHours > 0 && currentAllocated >= targetHours) {
+                      continue; // Skip subjects that have reached target workload
                     }
 
                     const dayLessonsCount = trialRunningSlots.filter(s =>
@@ -3190,14 +3268,16 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                     }
                   }
 
+                  if (!suitableSub) return;
+
                   const subUpper = suitableSub.toUpperCase().trim();
                   const targetHours = normalizedWorkloads[subUpper] || 0;
                   const currentAllocated = trialRunningSlots.filter(s =>
                     s.class_id === cls.id && s.subject.toUpperCase().trim() === subUpper
                   ).length;
 
-                  if (targetHours > 0 && targetHours <= 2 && currentAllocated >= targetHours) {
-                    return; // Do not push if it's Espanhol or capped
+                  if (targetHours > 0 && currentAllocated >= targetHours) {
+                    return; // Do not push if capped
                   }
 
                   candidates.push({
@@ -4214,7 +4294,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                   onClick={resolveConflictsAutomatically}
                   className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm transition-all flex items-center gap-1.5"
                 >
-                  🛠️ Arrumar conflito automaticamente
+                  🛠️ Reparar erros e horários vagos
                 </button>
               )}
               <button onClick={() => setScheduleStatus(null)} className="text-xs font-semibold hover:underline px-2 py-1">Fechar</button>

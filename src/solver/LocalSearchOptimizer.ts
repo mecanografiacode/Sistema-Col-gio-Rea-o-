@@ -63,41 +63,6 @@ export class LocalSearchOptimizer {
       }
     }
 
-    // Final pass: ensure absolutely NO empty slots exist. Fill every empty slot with a default or copied subject from that class.
-    for (const cls of classes) {
-      const clsBlocks = classIndex.getTimeBlocks(cls.id).filter(b => !b.is_interval);
-      const is678 = classIndex.is678(cls.id);
-      const existingClassSlots = slots.filter(s => s.class_id === cls.id);
-      const sampleSubject = existingClassSlots.length > 0 ? existingClassSlots[0].subject : 'Estudo Dirigido';
-      const sampleTeacher = existingClassSlots.length > 0 ? existingClassSlots[0].teacher_id : (teachers[0]?.id || '');
-
-      for (const day of this.days) {
-        const isShortDay = is678 && (day === 'segunda' || day === 'quarta' || day === 'sexta');
-        const maxIdx = isShortDay ? Math.min(5, clsBlocks.length) : clsBlocks.length;
-
-        for (let idx = 0; idx < maxIdx; idx++) {
-          const block = clsBlocks[idx];
-          const occupied = slots.some(s =>
-            s.class_id === cls.id &&
-            s.day_of_week === day &&
-            s.start_time === block.start_time
-          );
-
-          if (!occupied) {
-            slots.push({
-              id: crypto.randomUUID(),
-              class_id: cls.id,
-              teacher_id: sampleTeacher,
-              subject: sampleSubject,
-              day_of_week: day,
-              start_time: block.start_time,
-              end_time: block.end_time
-            });
-          }
-        }
-      }
-    }
-
     return slots;
   }
 }
