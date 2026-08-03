@@ -160,7 +160,7 @@ const isTeacherAvailable = (
 
   // 2. Availability shift
   const startHour = parseInt((block.start_time || '07:00').split(':')[0] || '0', 10);
-  const isMorning = startHour < 13;
+  const isMorning = startHour < 12;
   if (teacher.availability_shift === 'matutino' && !isMorning) return false;
   if (teacher.availability_shift === 'vespertino' && isMorning) return false;
 
@@ -1663,6 +1663,62 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
     return { isConflict: false, reason: '', conflictingClasses: [] };
   };
 
+  const getSlotAlternatives = (classId: string, day: DayOfWeek, startTime: string, endTime: string, currentSlotId?: string) => {
+    const cls = classes.find(c => c.id === classId);
+    if (!cls) return [];
+
+    const workloads = cls.subject_workloads || (cls.group === 'anos_finais' ? DEFAULT_FINAIS_WORKLOAD : DEFAULT_MEDIO_WORKLOAD);
+    const blockIdx = timeBlocks
+      .filter(tb => tb.class_id === classId && !tb.is_interval)
+      .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time))
+      .findIndex(tb => tb.start_time === startTime);
+
+    const otherSlots = scheduleSlots.filter(s => s.id !== currentSlotId && !(s.class_id === classId && s.day_of_week === day && s.start_time === startTime && s.end_time === endTime));
+
+    const result: { teacher: Teacher; subject: string; remainingWorkload: number; countInDay: number }[] = [];
+
+    teachers.forEach(t => {
+      if (t.groups && t.groups.length > 0 && !t.groups.includes(cls.group)) return;
+
+      const blockObj = { start_time: startTime, end_time: endTime };
+      if (!isTeacherAvailable(t, day, blockObj, blockIdx >= 0 ? blockIdx : 0)) return;
+
+      const busyInOtherClass = otherSlots.some(s => s.teacher_id === t.id && s.day_of_week === day && s.start_time === startTime && s.end_time === endTime);
+      if (busyInOtherClass) return;
+
+      (t.subjects || []).forEach(sub => {
+        let targetH = 0;
+        for (const [wSub, h] of Object.entries(workloads)) {
+          if (isSameSubject(wSub, sub) && typeof h === 'number') {
+            targetH = h;
+            break;
+          }
+        }
+
+        const currentWeekly = otherSlots.filter(s => s.class_id === classId && isSameSubject(s.subject, sub)).length;
+        const countInDay = otherSlots.filter(s => s.class_id === classId && s.day_of_week === day && isSameSubject(s.subject, sub)).length;
+
+        if (countInDay >= 2) return;
+
+        const remaining = targetH > 0 ? targetH - currentWeekly : 0;
+
+        result.push({
+          teacher: t,
+          subject: sub,
+          remainingWorkload: Math.max(0, remaining),
+          countInDay
+        });
+      });
+    });
+
+    return result.sort((a, b) => {
+      if (a.remainingWorkload !== b.remainingWorkload) {
+        return b.remainingWorkload - a.remainingWorkload;
+      }
+      return a.countInDay - b.countInDay;
+    });
+  };
+
   useEffect(() => {
     const allConflicts: string[] = [];
     scheduleSlots.forEach(slot => {
@@ -1670,7 +1726,10 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
       if (isConflict) {
         const clsName = classes.find(c => c.id === slot.class_id)?.name || 'Turma';
         const teacherName = teachers.find(t => t.id === slot.teacher_id)?.name || 'Professor';
-        allConflicts.push(`[${clsName}] Conflito com ${teacherName}: ${reason}`);
+        const alts = getSlotAlternatives(slot.class_id, slot.day_of_week, slot.start_time, slot.end_time, slot.id);
+        const topAlt = alts.find(a => a.remainingWorkload > 0) || alts[0];
+        const altText = topAlt ? ` | 💡 Sugestão de Alternativa: Alocar ${topAlt.teacher.name} (${topAlt.subject})` : '';
+        allConflicts.push(`[${clsName}] Conflito com ${teacherName}: ${reason}.${altText}`);
       }
     });
 
@@ -1707,7 +1766,10 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
               sexta: 'Sexta-feira'
             };
             const dayLabel = dayMap[day] || day;
-            emptySlotsWarnings.push(`[${cls.name}] Horário Vago na ${dayLabel} (${block.start_time} - ${block.end_time}) - Alunos ficam livres!`);
+            const alts = getSlotAlternatives(cls.id, day, block.start_time, block.end_time);
+            const topAlt = alts.find(a => a.remainingWorkload > 0) || alts[0];
+            const altText = topAlt ? ` | 💡 Alternativa Sugerida: ${topAlt.teacher.name} (${topAlt.subject} - ${topAlt.remainingWorkload} aula(s) restante(s))` : '';
+            emptySlotsWarnings.push(`[${cls.name}] Horário Vago na ${dayLabel} (${block.start_time} - ${block.end_time}).${altText}`);
           }
         });
       });
@@ -2231,45 +2293,53 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
 
             let chosen: { teacher: Teacher; subject: string } | null = null;
 
-            // Priority 1: Group teachers with subject under target weekly workload
+            const getDesignatedTeacherId = (sub: string) => {
+              const existingSlot = slots.find(s => s.class_id === cls.id && isSameSubject(s.subject, sub));
+              return existingSlot ? existingSlot.teacher_id : null;
+            };
+
+            const findBestTeacherForSubject = (sub: string, pool: Teacher[]) => {
+              const desId = getDesignatedTeacherId(sub);
+              if (desId) {
+                const desTeacher = pool.find(t => isSameTeacher(t.id, t.name, desId, undefined));
+                if (desTeacher) return desTeacher;
+              }
+              return pool.find(t => (t.subjects || []).some(ts => isSameSubject(ts, sub)));
+            };
+
+            // Priority 1: Group teachers with subject under target weekly workload (prefer days where countInDay === 0)
             const groupTeachers = availableTeachers.filter(t => !t.groups || t.groups.length === 0 || t.groups.includes(cls.group));
-            for (const t of groupTeachers) {
-              for (const sub of (t.subjects || [])) {
-                let targetH = 0;
-                for (const [wSub, h] of Object.entries(workloads || {})) {
-                  if (isSameSubject(wSub, sub) && typeof h === 'number') {
-                    targetH = h;
-                    break;
-                  }
-                }
+            for (const passCount of [0, 1]) {
+              for (const sub of Object.keys(workloads || {})) {
+                let targetH = typeof workloads[sub] === 'number' ? workloads[sub] : 0;
                 const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
                 const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
 
-                if (targetH > 0 && currentWeekly < targetH && countInDay < 2) {
-                  chosen = { teacher: t, subject: sub };
-                  break;
+                if (targetH > 0 && currentWeekly < targetH && countInDay === passCount && countInDay < 2) {
+                  const matchingTeacher = findBestTeacherForSubject(sub, groupTeachers);
+                  if (matchingTeacher) {
+                    chosen = { teacher: matchingTeacher, subject: sub };
+                    break;
+                  }
                 }
               }
               if (chosen) break;
             }
 
-            // Priority 2: Any available teacher with a subject that still needs weekly hours
+            // Priority 2: Any available teacher with a subject that still needs weekly hours (prefer passCount 0)
             if (!chosen) {
-              for (const t of availableTeachers) {
-                for (const sub of (t.subjects || [])) {
-                  let targetH = 0;
-                  for (const [wSub, h] of Object.entries(workloads || {})) {
-                    if (isSameSubject(wSub, sub) && typeof h === 'number') {
-                      targetH = h;
-                      break;
-                    }
-                  }
+              for (const passCount of [0, 1]) {
+                for (const sub of Object.keys(workloads || {})) {
+                  let targetH = typeof workloads[sub] === 'number' ? workloads[sub] : 0;
                   const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
                   const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
 
-                  if (targetH > 0 && currentWeekly < targetH && countInDay < 2) {
-                    chosen = { teacher: t, subject: sub };
-                    break;
+                  if (targetH > 0 && currentWeekly < targetH && countInDay === passCount && countInDay < 2) {
+                    const matchingTeacher = findBestTeacherForSubject(sub, availableTeachers);
+                    if (matchingTeacher) {
+                      chosen = { teacher: matchingTeacher, subject: sub };
+                      break;
+                    }
                   }
                 }
                 if (chosen) break;
@@ -2284,9 +2354,7 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
                 if (currentWeekly < h) {
                   const countInDay = countDaySlotsForSubject(cls.id, day, wSub, slots);
                   if (countInDay < 2) {
-                    const matchingTeacher = availableTeachers.find(t =>
-                      (t.subjects || []).some(ts => isSameSubject(ts, wSub))
-                    );
+                    const matchingTeacher = findBestTeacherForSubject(wSub, availableTeachers);
                     if (matchingTeacher) {
                       chosen = { teacher: matchingTeacher, subject: wSub };
                       break;
@@ -2296,76 +2364,30 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
               }
             }
 
-            // Priority 4: GUARANTEE ZERO AULAS LIVRES - Relax teacher availability to find a teacher with no time collision in another class
-            if (!chosen) {
-              const teachersWithoutConflict = teachersList.filter(t => {
-                const hasConflict = slots.some(s => {
-                  if (s.day_of_week !== day) return false;
-                  if (!timesOverlap(s.start_time, s.end_time, block.start_time, block.end_time)) return false;
-                  const sTeacher = teachersList.find(tr => tr.id === s.teacher_id);
-                  return isSameTeacher(s.teacher_id, sTeacher?.name, t.id, t.name);
+            // Priority 4: Fill remaining empty slot with any available teacher without exceeding 2 lessons per day
+            if (!chosen && availableTeachers.length > 0) {
+              const subjectCandidates = Object.entries(workloads || {})
+                .map(([wSub, h]) => ({
+                  subject: wSub,
+                  target: typeof h === 'number' ? h : 1,
+                  weeklyCount: countWeeklySlotsForSubject(cls.id, wSub, slots),
+                  dayCount: countDaySlotsForSubject(cls.id, day, wSub, slots)
+                }))
+                .sort((a, b) => {
+                  const aNeed = a.weeklyCount < a.target;
+                  const bNeed = b.weeklyCount < b.target;
+                  if (aNeed && !bNeed) return -1;
+                  if (!aNeed && bNeed) return 1;
+                  if (a.dayCount !== b.dayCount) return a.dayCount - b.dayCount;
+                  return (a.weeklyCount / a.target) - (b.weeklyCount / b.target);
                 });
-                return !hasConflict;
-              });
 
-              // 4a. Try subjects needing workload using teachers without time conflict
-              for (const [wSub, h] of Object.entries(workloads || {})) {
-                if (typeof h !== 'number' || h <= 0) continue;
-                const currentWeekly = countWeeklySlotsForSubject(cls.id, wSub, slots);
-                if (currentWeekly < h) {
-                  const matchingTeacher = teachersWithoutConflict.find(t =>
-                    (t.subjects || []).some(ts => isSameSubject(ts, wSub))
-                  );
-                  if (matchingTeacher) {
-                    chosen = { teacher: matchingTeacher, subject: wSub };
-                    break;
-                  }
-                }
-              }
-
-              // 4b. Try any class subject needing workload using teachers without time conflict
-              if (!chosen) {
-                const sortedSubjects = Object.entries(workloads || {})
-                  .map(([wSub, h]) => ({
-                    subject: wSub,
-                    target: typeof h === 'number' ? h : 1,
-                    count: countWeeklySlotsForSubject(cls.id, wSub, slots)
-                  }))
-                  .filter(subItem => subItem.count < subItem.target)
-                  .sort((a, b) => (a.count / a.target) - (b.count / b.target));
-
-                for (const subItem of sortedSubjects) {
-                  const countInDay = countDaySlotsForSubject(cls.id, day, subItem.subject, slots);
-                  if (countInDay >= 2) continue;
-                  const matchingTeacher = teachersWithoutConflict.find(t =>
-                    (t.subjects || []).some(ts => isSameSubject(ts, subItem.subject))
-                  );
-                  if (matchingTeacher) {
-                    chosen = { teacher: matchingTeacher, subject: subItem.subject };
-                    break;
-                  }
-                }
-              }
-
-              // 4c. Any teacher in school without time conflict for subjects strictly under target workload
-              if (!chosen && teachersWithoutConflict.length > 0) {
-                for (const teacher of teachersWithoutConflict) {
-                  for (const sub of (teacher.subjects || [])) {
-                    let targetH = 0;
-                    for (const [wSub, h] of Object.entries(workloads || {})) {
-                      if (isSameSubject(wSub, sub) && typeof h === 'number') {
-                        targetH = h;
-                        break;
-                      }
-                    }
-                    const currentWeekly = countWeeklySlotsForSubject(cls.id, sub, slots);
-                    const countInDay = countDaySlotsForSubject(cls.id, day, sub, slots);
-                    if (targetH > 0 && currentWeekly < targetH && countInDay < 2) {
-                      chosen = { teacher, subject: sub };
-                      break;
-                    }
-                  }
-                  if (chosen) break;
+              for (const cand of subjectCandidates) {
+                if (cand.dayCount >= 2) continue; // STRICTLY MAX 2 LESSONS PER DAY PER SUBJECT
+                const matchingTeacher = findBestTeacherForSubject(cand.subject, availableTeachers);
+                if (matchingTeacher) {
+                  chosen = { teacher: matchingTeacher, subject: cand.subject };
+                  break;
                 }
               }
             }
@@ -2387,9 +2409,6 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
         }
       });
     });
-
-    // 5. Make all double lessons consecutive (dobradinhas coladas)
-    slots = makeDoubleLessonsConsecutive(slots, targetClasses, teachersList, activeTimeBlocks);
 
     const detectedConflicts = checkConflictsForList(slots);
     return { finalSlots: slots, unfilledCount, detectedConflicts };
@@ -4779,79 +4798,126 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
           </div>
 
           {/* MATRIX CELL EDIT MODAL */}
-          {editingMatrixCell && (
-            <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in duration-150">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                  <div>
-                    <h4 className="font-bold text-slate-800 text-sm">
-                      Editar Aulas - {classes.find(c => c.id === editingMatrixCell.classId)?.name}
-                    </h4>
-                    <p className="text-[11px] text-slate-500 capitalize">
-                      {editingMatrixCell.day === 'terca' ? 'Terça' : editingMatrixCell.day} | {editingMatrixCell.startTime} - {editingMatrixCell.endTime}
-                    </p>
-                  </div>
-                  <button onClick={() => setEditingMatrixCell(null)} className="text-slate-400 hover:text-slate-600 p-1">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
+          {editingMatrixCell && (() => {
+            const matrixAlts = getSlotAlternatives(
+              editingMatrixCell.classId,
+              editingMatrixCell.day,
+              editingMatrixCell.startTime,
+              editingMatrixCell.endTime
+            );
 
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Professor</label>
-                    <select
-                      className="w-full text-xs px-3 py-2 border border-slate-300 rounded-xl bg-white font-medium text-slate-800"
-                      value={matrixCellTeacherId}
-                      onChange={e => {
-                        setMatrixCellTeacherId(e.target.value);
-                        setMatrixCellSubject('');
-                      }}
-                    >
-                      <option value="">Nenhum / Horário Vago</option>
-                      {teachers
-                        .filter(t => {
-                          const cls = classes.find(c => c.id === editingMatrixCell.classId);
-                          return cls && t.groups?.includes(cls.group);
-                        })
-                        .map(t => (
-                          <option key={t.id} value={t.id}>{t.name}</option>
+            return (
+              <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+                <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in duration-150">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                    <div>
+                      <h4 className="font-bold text-slate-800 text-sm">
+                        Editar Aulas - {classes.find(c => c.id === editingMatrixCell.classId)?.name}
+                      </h4>
+                      <p className="text-[11px] text-slate-500 capitalize">
+                        {editingMatrixCell.day === 'terca' ? 'Terça' : editingMatrixCell.day} | {editingMatrixCell.startTime} - {editingMatrixCell.endTime}
+                      </p>
+                    </div>
+                    <button onClick={() => setEditingMatrixCell(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* SUGESTÕES DE ALTERNATIVAS SEM CONFLITO */}
+                  <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                        <Wand2 className="w-3.5 h-3.5 text-amber-600" />
+                        Alternativas Sem Conflito
+                      </span>
+                      <span className="text-[10px] text-amber-700 font-medium">1-Clique p/ Aplicar</span>
+                    </div>
+                    {matrixAlts.length > 0 ? (
+                      <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                        {matrixAlts.slice(0, 4).map((alt, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => {
+                              setMatrixCellTeacherId(alt.teacher.id);
+                              setMatrixCellSubject(alt.subject);
+                            }}
+                            className="w-full text-left bg-white hover:bg-amber-100/90 border border-amber-200/60 p-2 rounded-lg transition-all flex items-center justify-between group shadow-2xs"
+                          >
+                            <div>
+                              <div className="font-bold text-xs text-slate-800 group-hover:text-amber-950">{alt.teacher.name}</div>
+                              <div className="text-[10px] text-slate-500">{alt.subject}</div>
+                            </div>
+                            <div className="text-right">
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${alt.remainingWorkload > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+                                {alt.remainingWorkload > 0 ? `${alt.remainingWorkload} aula(s) livre(s)` : 'Carga ok'}
+                              </span>
+                            </div>
+                          </button>
                         ))}
-                    </select>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-amber-800 opacity-80">Nenhum professor livre sem conflito para esta célula.</p>
+                    )}
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Disciplina</label>
-                    <select
-                      className="w-full text-xs px-3 py-2 border border-slate-300 rounded-xl bg-white font-medium text-slate-800 disabled:opacity-50"
-                      value={matrixCellSubject}
-                      onChange={e => setMatrixCellSubject(e.target.value)}
-                      disabled={!matrixCellTeacherId}
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Professor</label>
+                      <select
+                        className="w-full text-xs px-3 py-2 border border-slate-300 rounded-xl bg-white font-medium text-slate-800"
+                        value={matrixCellTeacherId}
+                        onChange={e => {
+                          setMatrixCellTeacherId(e.target.value);
+                          setMatrixCellSubject('');
+                        }}
+                      >
+                        <option value="">Nenhum / Horário Vago</option>
+                        {teachers
+                          .filter(t => {
+                            const cls = classes.find(c => c.id === editingMatrixCell.classId);
+                            return cls && t.groups?.includes(cls.group);
+                          })
+                          .map(t => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Disciplina</label>
+                      <select
+                        className="w-full text-xs px-3 py-2 border border-slate-300 rounded-xl bg-white font-medium text-slate-800 disabled:opacity-50"
+                        value={matrixCellSubject}
+                        onChange={e => setMatrixCellSubject(e.target.value)}
+                        disabled={!matrixCellTeacherId}
+                      >
+                        <option value="">Selecione a disciplina...</option>
+                        {teachers.find(t => t.id === matrixCellTeacherId)?.subjects.map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2 pt-2 border-t border-slate-100">
+                    <button
+                      onClick={saveMatrixCell}
+                      className="flex-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold py-2 rounded-xl transition-all shadow-xs"
                     >
-                      <option value="">Selecione a disciplina...</option>
-                      {teachers.find(t => t.id === matrixCellTeacherId)?.subjects.map(s => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
+                      Salvar Célula
+                    </button>
+                    <button
+                      onClick={() => setEditingMatrixCell(null)}
+                      className="px-4 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold py-2 rounded-xl transition-colors"
+                    >
+                      Cancelar
+                    </button>
                   </div>
-                </div>
-
-                <div className="flex items-center space-x-2 pt-2 border-t border-slate-100">
-                  <button
-                    onClick={saveMatrixCell}
-                    className="flex-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold py-2 rounded-xl transition-all shadow-xs"
-                  >
-                    Salvar Célula
-                  </button>
-                  <button
-                    onClick={() => setEditingMatrixCell(null)}
-                    className="px-4 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold py-2 rounded-xl transition-colors"
-                  >
-                    Cancelar
-                  </button>
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
 
@@ -4915,34 +4981,60 @@ function ScheduleManager({ teachers, classes, subjects, scheduleSlots, setSchedu
 
                             return (
                               <td key={day} onDragOver={(e) => handleDragOver(e, day, block)} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, day, block)} className={`border-r border-slate-200 last:border-r-0 p-2 align-top relative transition-all ${isDraggedOver ? 'bg-red-50 ring-2 ring-red-500 ring-dashed' : ''} ${isAdmin ? 'hover:bg-slate-50 cursor-pointer' : ''}`} onClick={() => !isEditing && openCellEdit(block, day, existingSlot)}>
-                                {isEditing ? (
-                                  <div className="flex flex-col space-y-2 bg-white p-2 rounded-lg shadow-sm border border-slate-200" onClick={e => e.stopPropagation()}>
-                                    <select 
-                                      className="text-xs px-2 py-1.5 border rounded w-full"
-                                      value={cellTeacherId}
-                                      onChange={e => {
-                                        setCellTeacherId(e.target.value);
-                                        setCellSubject('');
-                                      }}
-                                    >
-                                      <option value="">Professor...</option>
-                                      {availableTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                                    </select>
-                                    <select 
-                                      className="text-xs px-2 py-1.5 border rounded w-full"
-                                      value={cellSubject}
-                                      onChange={e => setCellSubject(e.target.value)}
-                                      disabled={!cellTeacherId}
-                                    >
-                                      <option value="">Disciplina...</option>
-                                      {teachers.find(t => t.id === cellTeacherId)?.subjects.map(s => <option key={s} value={s}>{s}</option>)}
-                                    </select>
-                                    <div className="flex space-x-1 pt-1">
-                                      <button onClick={() => saveCell(block, day)} className="flex-1 bg-red-600 text-white text-[10px] font-bold py-1 rounded">Salvar</button>
-                                      <button onClick={() => setEditingCell(null)} className="flex-1 bg-slate-100 text-slate-600 text-[10px] font-bold py-1 rounded">Cancelar</button>
+                                {isEditing ? (() => {
+                                  const cellAlts = selectedClassId ? getSlotAlternatives(selectedClassId, day, block.start_time, block.end_time) : [];
+                                  return (
+                                    <div className="flex flex-col space-y-2 bg-white p-2.5 rounded-xl shadow-md border border-slate-200" onClick={e => e.stopPropagation()}>
+                                      {cellAlts.length > 0 && (
+                                        <div className="bg-amber-50/80 border border-amber-200 p-2 rounded-lg space-y-1">
+                                          <div className="text-[10px] font-bold text-amber-900 flex items-center gap-1">
+                                            <Wand2 className="w-3 h-3 text-amber-600" /> Alternativas Livres:
+                                          </div>
+                                          <div className="space-y-1 max-h-28 overflow-y-auto pr-0.5">
+                                            {cellAlts.slice(0, 3).map((alt, aIdx) => (
+                                              <button
+                                                key={aIdx}
+                                                type="button"
+                                                onClick={() => {
+                                                  setCellTeacherId(alt.teacher.id);
+                                                  setCellSubject(alt.subject);
+                                                }}
+                                                className="w-full text-left bg-white hover:bg-amber-100 p-1.5 rounded text-[10px] border border-amber-200/60 flex items-center justify-between"
+                                              >
+                                                <span className="font-bold text-slate-800 truncate">{alt.teacher.name} ({alt.subject})</span>
+                                                <span className="text-[9px] text-emerald-700 font-bold ml-1">{alt.remainingWorkload}a</span>
+                                              </button>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                      <select 
+                                        className="text-xs px-2 py-1.5 border rounded w-full bg-white font-medium"
+                                        value={cellTeacherId}
+                                        onChange={e => {
+                                          setCellTeacherId(e.target.value);
+                                          setCellSubject('');
+                                        }}
+                                      >
+                                        <option value="">Professor...</option>
+                                        {availableTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                      </select>
+                                      <select 
+                                        className="text-xs px-2 py-1.5 border rounded w-full bg-white font-medium disabled:opacity-50"
+                                        value={cellSubject}
+                                        onChange={e => setCellSubject(e.target.value)}
+                                        disabled={!cellTeacherId}
+                                      >
+                                        <option value="">Disciplina...</option>
+                                        {teachers.find(t => t.id === cellTeacherId)?.subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                                      </select>
+                                      <div className="flex space-x-1 pt-1">
+                                        <button onClick={() => saveCell(block, day)} className="flex-1 bg-red-600 text-white text-[10px] font-bold py-1.5 rounded shadow-2xs">Salvar</button>
+                                        <button onClick={() => setEditingCell(null)} className="flex-1 bg-slate-100 text-slate-600 text-[10px] font-bold py-1.5 rounded">Cancelar</button>
+                                      </div>
                                     </div>
-                                  </div>
-                                ) : existingSlot ? (() => {
+                                  );
+                                })() : existingSlot ? (() => {
                                   const conflict = checkSlotConflict(existingSlot);
                                   return (
                                     <div draggable={isAdmin} onDragStart={(e) => handleDragStart(e, existingSlot)} onDragEnd={handleDragEnd} className={`flex flex-col items-center justify-center h-full min-h-[60px] p-2 rounded-lg border transition-all ${isAdmin ? 'cursor-grab active:cursor-grabbing hover:brightness-95' : ''} ${conflict.isConflict ? 'bg-red-100 border-red-500 text-red-950 shadow-md ring-2 ring-red-400 animate-pulse' : 'bg-emerald-50/60 border-emerald-200 text-slate-800'}`}>

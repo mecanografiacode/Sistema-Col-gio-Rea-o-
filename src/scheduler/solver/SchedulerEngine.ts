@@ -4,7 +4,7 @@ import { ClassIndex } from '../core/indices/ClassIndex';
 import { ScoringEngine } from '../core/scoring';
 import { InputValidator } from '../validator/InputValidator';
 import { Teacher, SchoolClass, Subject, TimeBlock, ScheduleSlot, DayOfWeek } from '../../types';
-import { is678Grade, isSameSubject } from '../../solver/types';
+import { getClassShift, is678Grade, isSameSubject } from '../../solver/types';
 
 export class SchedulerEngine {
   private teachers: Teacher[];
@@ -38,7 +38,7 @@ export class SchedulerEngine {
 
     // 2. Availability shift
     const startHour = parseInt((block.start_time || '07:00').split(':')[0] || '0', 10);
-    const isMorning = startHour < 13;
+    const isMorning = startHour < 12;
     if (teacher.availability_shift === 'matutino' && !isMorning) return false;
     if (teacher.availability_shift === 'vespertino' && isMorning) return false;
 
@@ -81,14 +81,22 @@ export class SchedulerEngine {
     for (const cls of this.classes) {
       const clsDomains = [];
       const clsBlocks = this.timeBlocks.filter(b => b.class_id === cls.id && !b.is_interval);
-      const blocksToUse = clsBlocks.length >= 6 ? clsBlocks : [
+      const isAfternoon = getClassShift(cls) === 'vespertino';
+      const blocksToUse = clsBlocks.length >= 6 ? clsBlocks : (isAfternoon ? [
+        { start_time: '13:30', end_time: '14:20' },
+        { start_time: '14:20', end_time: '15:10' },
+        { start_time: '15:10', end_time: '16:00' },
+        { start_time: '16:20', end_time: '17:10' },
+        { start_time: '17:10', end_time: '18:00' },
+        { start_time: '18:00', end_time: '18:50' }
+      ] : [
         { start_time: '07:00', end_time: '07:50' },
         { start_time: '07:50', end_time: '08:40' },
         { start_time: '08:40', end_time: '09:30' },
         { start_time: '09:50', end_time: '10:40' },
         { start_time: '10:40', end_time: '11:30' },
         { start_time: '11:30', end_time: '12:20' }
-      ];
+      ]);
 
       // 1. Filtrar slots válidos para a turma (respeitando bloqueios de dias e restrições de horários ex: 6º-8º ano)
       const validSlots: { day: number; dayName: DayOfWeek; period: number; block: { start_time: string; end_time?: string } }[] = [];
@@ -152,7 +160,7 @@ export class SchedulerEngine {
           }
 
           // Compatibilidade de turno
-          const clsShift = cls.shift || 'matutino';
+          const clsShift = getClassShift(cls);
           if (t.availability_shift && t.availability_shift !== 'ambos' && clsShift !== 'ambos' && t.availability_shift !== clsShift) {
             return false;
           }
@@ -233,6 +241,7 @@ export class SchedulerEngine {
     const teacherOccupiedSlots = new Set<string>(); // `${teacherId}_${day}_${period}`
     const classSubjectDailyCount = new Map<string, number>(); // `${classId}_${dayName}_${subjectName}`
     const teacherAssignedCount = new Map<string, number>(); // `${teacherId}`
+    const classSubjectAssignedTeacher = new Map<string, string>(); // `${classId}_${subjectName}` -> teacherId
 
     let stepCount = 0;
     const maxSteps = 80000;
@@ -263,11 +272,36 @@ export class SchedulerEngine {
 
       const candidates = domain.validCandidates;
 
-      for (const cand of candidates) {
+      // Ordenação dinâmica de candidatos para favorecer espalhamento em dias diferentes e equilíbrio
+      const sortedCandidates = [...candidates].sort((candA, candB) => {
+        const getScore = (cand: typeof candA) => {
+          let score = 0;
+          const { teacher, slot } = cand;
+          const subjDayKey = `${token.classId}_${slot.dayName}_${token.subjectName}`;
+          const currentDaily = classSubjectDailyCount.get(subjDayKey) || 0;
+
+          if (currentDaily === 0) {
+            // Dar preferência para colocar a aula em um dia que a matéria ainda NÃO teve aula (espalhamento entre dias)
+            score += 5000;
+          } else if (currentDaily === 1) {
+            // Se já tem 1 aula no mesmo dia, dar menor preferência para incentivar aulas em dias separados
+            score -= 2000;
+          }
+
+          // Equilíbrio da carga alocada no professor
+          score -= (teacherAssignedCount.get(teacher.id) || 0) * 10;
+          return score;
+        };
+
+        return getScore(candB) - getScore(candA);
+      });
+
+      for (const cand of sortedCandidates) {
         const { teacher, slot } = cand;
         const classSlotKey = `${token.classId}_${slot.day}_${slot.period}`;
         const teacherSlotKey = `${teacher.id}_${slot.dayName}_${slot.period}`;
         const subjDayKey = `${token.classId}_${slot.dayName}_${token.subjectName}`;
+        const classSubjKey = `${token.classId}_${token.subjectName}`;
 
         // VERIFICAÇÃO DE RESTRIÇÕES ESTREITAS (HARD CONSTRAINTS):
         // 1. Horário da turma já ocupado
@@ -285,7 +319,18 @@ export class SchedulerEngine {
           continue;
         }
 
+        // 5. Consistência de professor por disciplina na turma
+        const assignedTeacherId = classSubjectAssignedTeacher.get(classSubjKey);
+        if (assignedTeacherId && assignedTeacherId !== teacher.id) {
+          continue;
+        }
+
         // --- APLICAR ALOCAÇÃO ---
+        const wasFirstTeacherForSubj = !classSubjectAssignedTeacher.has(classSubjKey);
+        if (wasFirstTeacherForSubj) {
+          classSubjectAssignedTeacher.set(classSubjKey, teacher.id);
+        }
+
         classOccupiedSlots.add(classSlotKey);
         teacherOccupiedSlots.add(teacherSlotKey);
         classSubjectDailyCount.set(subjDayKey, currentDaily + 1);
@@ -304,6 +349,9 @@ export class SchedulerEngine {
 
         // --- BACKTRACK (DESFAZER ALOCAÇÃO) ---
         completeSchedule.pop();
+        if (wasFirstTeacherForSubj) {
+          classSubjectAssignedTeacher.delete(classSubjKey);
+        }
         classOccupiedSlots.delete(classSlotKey);
         teacherOccupiedSlots.delete(teacherSlotKey);
         classSubjectDailyCount.set(subjDayKey, currentDaily);
@@ -328,11 +376,13 @@ export class SchedulerEngine {
     block: { start_time: string },
     period: number,
     teacherBusy: Map<string, string>,
-    teacherAssignedCount?: Map<string, number>
+    teacherAssignedCount?: Map<string, number>,
+    classSubjectAssignedTeacher?: Map<string, string>
   ): Teacher[] {
     const busyKey = (tId: string) => `${tId}_${day}_${period}`;
+    const assignedTeacherId = classSubjectAssignedTeacher?.get(`${cls.id}_${subjName}`);
 
-    return this.teachers.filter(t => {
+    const available = this.teachers.filter(t => {
       // Must teach subject
       const teachesSubj = (t.subjects || []).some(s => isSameSubject(s, subjName));
       if (!teachesSubj) return false;
@@ -360,6 +410,13 @@ export class SchedulerEngine {
 
       return true;
     });
+
+    if (assignedTeacherId) {
+      const preferred = available.filter(t => t.id === assignedTeacherId);
+      if (preferred.length > 0) return preferred;
+    }
+
+    return available;
   }
 
   public convertToInputData(): InputData {
@@ -396,7 +453,7 @@ export class SchedulerEngine {
     const sClasses: SClass[] = this.classes.map(c => ({
       id: c.id,
       name: c.name,
-      shift: c.shift === 'vespertino' ? 'afternoon' : 'morning',
+      shift: getClassShift(c) === 'vespertino' ? 'afternoon' : 'morning',
       maxLessonsPerDay: 6,
       blockedDays: []
     }));
@@ -513,6 +570,7 @@ export class SchedulerEngine {
 
     // Total assigned count per teacher
     const teacherAssignedCount = new Map<string, number>();
+    const classSubjectAssignedTeacher = new Map<string, string>();
 
     // Process each class
     this.classes.forEach((cls, clsIdx) => {
@@ -563,139 +621,67 @@ export class SchedulerEngine {
       // Sort subjects by workload descending
       const subjectTargets = Array.from(targetWorkloadMap.entries()).sort((a, b) => b[1] - a[1]);
 
-      // PASS 1: Try placing DOUBLE PERIODS (dobradinhas) for subjects with target >= 2
-      for (const [subjName, targetCount] of subjectTargets) {
-        let currentWeekly = classSubjectWeeklyCount.get(getSubjWeeklyKey(cls.id, subjName)) || 0;
+      // PASS 1: Place SINGLE LESSONS for subject workload demand, prioritizing spreading across DIFFERENT days (1 per day first)
+      for (const maxDailyThreshold of [0, 1]) {
+        for (const [subjName, targetCount] of subjectTargets) {
+          let currentWeekly = classSubjectWeeklyCount.get(getSubjWeeklyKey(cls.id, subjName)) || 0;
 
-        // Try placing double periods as long as targetCount - currentWeekly >= 2
-        if (targetCount - currentWeekly >= 2) {
-          // Stagger days order per class index
-          const dayOrder = [0, 1, 2, 3, 4].map(d => (d + clsIdx) % 5);
+          while (currentWeekly < targetCount) {
+            let placed = false;
 
-          for (const day of dayOrder) {
-            if (currentWeekly >= targetCount) break;
+            // Stagger slots iteration per class index
+            const slotOffset = (clsIdx * 7) % validSlots.length;
+            const rotatedSlots = [
+              ...validSlots.slice(slotOffset),
+              ...validSlots.slice(0, slotOffset)
+            ];
 
-            const dayName = this.daysMap[day];
-            const sKey = getSubjDayKey(cls.id, dayName, subjName);
-            const currentDaily = classSubjectDayCount.get(sKey) || 0;
-            if (currentDaily > 0) continue; // Only place double period on a day with 0 lessons of this subject
+            for (const slot of rotatedSlots) {
+              const slotIdx = slot.day * 6 + slot.period;
+              if (classIndex.isOccupied(cls.id, slotIdx)) continue;
 
-            // Look for 2 adjacent open periods on this day
-            const daySlots = validSlots.filter(vs => vs.day === day);
-            for (let i = 0; i < daySlots.length - 1; i++) {
-              const slot1 = daySlots[i];
-              const slot2 = daySlots[i + 1];
+              const sKey = getSubjDayKey(cls.id, slot.dayName, subjName);
+              const currentDaily = classSubjectDayCount.get(sKey) || 0;
 
-              // Check adjacent periods (e.g. 0-1, 1-2, 3-4, 4-5)
-              if (slot2.period !== slot1.period + 1) continue;
+              // In threshold 0, only place if 0 lessons on this day so far (spreads across days)
+              if (maxDailyThreshold === 0 && currentDaily >= 1) continue;
+              // In threshold 1, allow max 2 lessons per day per subject
+              if (currentDaily >= 2) continue;
 
-              const slotIdx1 = slot1.day * 6 + slot1.period;
-              const slotIdx2 = slot2.day * 6 + slot2.period;
+              const availTeachers = this.getAvailableQualifiedTeachers(subjName, cls, slot.dayName, slot.block, slot.period, teacherBusy, teacherAssignedCount, classSubjectAssignedTeacher);
+              if (availTeachers.length > 0) {
+                availTeachers.sort((t1, t2) => (teacherAssignedCount.get(t1.id) || 0) - (teacherAssignedCount.get(t2.id) || 0));
+                const chosenTeacher = availTeachers[0];
 
-              if (classIndex.isOccupied(cls.id, slotIdx1) || classIndex.isOccupied(cls.id, slotIdx2)) continue;
+                classIndex.addLesson(cls.id, slot.day, slotIdx);
+                teacherIndex.addLesson(chosenTeacher.id, slot.day, slotIdx);
+                teacherBusy.set(getBusyKey(chosenTeacher.id, slot.dayName, slot.period), cls.id);
 
-              // Find a qualified teacher available and free for BOTH periods
-              const avail1 = this.getAvailableQualifiedTeachers(subjName, cls, dayName, slot1.block, slot1.period, teacherBusy, teacherAssignedCount);
-              const avail2 = this.getAvailableQualifiedTeachers(subjName, cls, dayName, slot2.block, slot2.period, teacherBusy, teacherAssignedCount);
-
-              // Find intersection of teachers available for both slots
-              const commonTeachers = avail1.filter(t1 => avail2.some(t2 => t2.id === t1.id));
-
-              if (commonTeachers.length > 0) {
-                commonTeachers.sort((t1, t2) => (teacherAssignedCount.get(t1.id) || 0) - (teacherAssignedCount.get(t2.id) || 0));
-                const chosenTeacher = commonTeachers[0];
-
-                // Place lesson 1
-                classIndex.addLesson(cls.id, slot1.day, slotIdx1);
-                teacherIndex.addLesson(chosenTeacher.id, slot1.day, slotIdx1);
-                teacherBusy.set(getBusyKey(chosenTeacher.id, dayName, slot1.period), cls.id);
-
-                // Place lesson 2
-                classIndex.addLesson(cls.id, slot2.day, slotIdx2);
-                teacherIndex.addLesson(chosenTeacher.id, slot2.day, slotIdx2);
-                teacherBusy.set(getBusyKey(chosenTeacher.id, dayName, slot2.period), cls.id);
-
-                classSubjectDayCount.set(sKey, 2);
-                currentWeekly += 2;
+                classSubjectDayCount.set(sKey, currentDaily + 1);
+                currentWeekly++;
                 classSubjectWeeklyCount.set(getSubjWeeklyKey(cls.id, subjName), currentWeekly);
-                teacherAssignedCount.set(chosenTeacher.id, (teacherAssignedCount.get(chosenTeacher.id) || 0) + 2);
+                teacherAssignedCount.set(chosenTeacher.id, (teacherAssignedCount.get(chosenTeacher.id) || 0) + 1);
+                if (!classSubjectAssignedTeacher.has(`${cls.id}_${subjName}`)) {
+                  classSubjectAssignedTeacher.set(`${cls.id}_${subjName}`, chosenTeacher.id);
+                }
 
                 completeSchedule.push({
-                  day: slot1.day,
-                  period: slot1.period,
-                  classId: cls.id,
-                  teacherId: chosenTeacher.id,
-                  subjectId: subjName
-                });
-                completeSchedule.push({
-                  day: slot2.day,
-                  period: slot2.period,
+                  day: slot.day,
+                  period: slot.period,
                   classId: cls.id,
                   teacherId: chosenTeacher.id,
                   subjectId: subjName
                 });
 
-                break; // Double period placed for this day
+                placed = true;
+                break;
               }
             }
-          }
-        }
-      }
 
-      // PASS 2: Place SINGLE LESSONS for remaining subject workload demand
-      for (const [subjName, targetCount] of subjectTargets) {
-        let currentWeekly = classSubjectWeeklyCount.get(getSubjWeeklyKey(cls.id, subjName)) || 0;
-
-        while (currentWeekly < targetCount) {
-          let placed = false;
-
-          // Stagger slots iteration per class index
-          const slotOffset = (clsIdx * 7) % validSlots.length;
-          const rotatedSlots = [
-            ...validSlots.slice(slotOffset),
-            ...validSlots.slice(0, slotOffset)
-          ];
-
-          for (const slot of rotatedSlots) {
-            const slotIdx = slot.day * 6 + slot.period;
-            if (classIndex.isOccupied(cls.id, slotIdx)) continue;
-
-            const sKey = getSubjDayKey(cls.id, slot.dayName, subjName);
-            const currentDaily = classSubjectDayCount.get(sKey) || 0;
-
-            // STRICT CONSTRAINT: Max 2 lessons per subject per day
-            if (currentDaily >= 2) continue;
-
-            const availTeachers = this.getAvailableQualifiedTeachers(subjName, cls, slot.dayName, slot.block, slot.period, teacherBusy, teacherAssignedCount);
-            if (availTeachers.length > 0) {
-              availTeachers.sort((t1, t2) => (teacherAssignedCount.get(t1.id) || 0) - (teacherAssignedCount.get(t2.id) || 0));
-              const chosenTeacher = availTeachers[0];
-
-              classIndex.addLesson(cls.id, slot.day, slotIdx);
-              teacherIndex.addLesson(chosenTeacher.id, slot.day, slotIdx);
-              teacherBusy.set(getBusyKey(chosenTeacher.id, slot.dayName, slot.period), cls.id);
-
-              classSubjectDayCount.set(sKey, currentDaily + 1);
-              currentWeekly++;
-              classSubjectWeeklyCount.set(getSubjWeeklyKey(cls.id, subjName), currentWeekly);
-              teacherAssignedCount.set(chosenTeacher.id, (teacherAssignedCount.get(chosenTeacher.id) || 0) + 1);
-
-              completeSchedule.push({
-                day: slot.day,
-                period: slot.period,
-                classId: cls.id,
-                teacherId: chosenTeacher.id,
-                subjectId: subjName
-              });
-
-              placed = true;
+            if (!placed) {
+              // Could not place remaining required lesson in current open slots with current threshold
               break;
             }
-          }
-
-          if (!placed) {
-            // Could not place remaining required lesson in current open slots
-            break;
           }
         }
       }
@@ -736,7 +722,7 @@ export class SchedulerEngine {
                   !teacherBusy.has(getBusyKey(existingTeacher.id, openSlot.dayName, openSlot.period))) {
 
                 // Check if a teacher for `subjName` is available at `slot`
-                const availForSubj = this.getAvailableQualifiedTeachers(subjName, cls, slot.dayName, slot.block, slot.period, teacherBusy, teacherAssignedCount);
+                const availForSubj = this.getAvailableQualifiedTeachers(subjName, cls, slot.dayName, slot.block, slot.period, teacherBusy, teacherAssignedCount, classSubjectAssignedTeacher);
                 if (availForSubj.length > 0) {
                   const newTeacher = availForSubj[0];
 
@@ -771,6 +757,9 @@ export class SchedulerEngine {
                   currentWeekly++;
                   classSubjectWeeklyCount.set(getSubjWeeklyKey(cls.id, subjName), currentWeekly);
                   teacherAssignedCount.set(newTeacher.id, (teacherAssignedCount.get(newTeacher.id) || 0) + 1);
+                  if (!classSubjectAssignedTeacher.has(`${cls.id}_${subjName}`)) {
+                    classSubjectAssignedTeacher.set(`${cls.id}_${subjName}`, newTeacher.id);
+                  }
 
                   swappedAndPlaced = true;
                   break;
@@ -798,7 +787,7 @@ export class SchedulerEngine {
           const sKey = getSubjDayKey(cls.id, slot.dayName, subjName);
           if ((classSubjectDayCount.get(sKey) || 0) >= 2) continue; // MAX 2 PER DAY
 
-          const availTeachers = this.getAvailableQualifiedTeachers(subjName, cls, slot.dayName, slot.block, slot.period, teacherBusy, teacherAssignedCount);
+          const availTeachers = this.getAvailableQualifiedTeachers(subjName, cls, slot.dayName, slot.block, slot.period, teacherBusy, teacherAssignedCount, classSubjectAssignedTeacher);
           if (availTeachers.length > 0) {
             availTeachers.sort((t1, t2) => (teacherAssignedCount.get(t1.id) || 0) - (teacherAssignedCount.get(t2.id) || 0));
             const chosenTeacher = availTeachers[0];
@@ -810,6 +799,9 @@ export class SchedulerEngine {
             classSubjectDayCount.set(sKey, (classSubjectDayCount.get(sKey) || 0) + 1);
             classSubjectWeeklyCount.set(getSubjWeeklyKey(cls.id, subjName), currentWeekly + 1);
             teacherAssignedCount.set(chosenTeacher.id, (teacherAssignedCount.get(chosenTeacher.id) || 0) + 1);
+            if (!classSubjectAssignedTeacher.has(`${cls.id}_${subjName}`)) {
+              classSubjectAssignedTeacher.set(`${cls.id}_${subjName}`, chosenTeacher.id);
+            }
 
             completeSchedule.push({
               day: slot.day,
@@ -835,16 +827,31 @@ export class SchedulerEngine {
         const candidates = subjectTargets.map(([subjName, targetCount]) => {
           const currentWeekly = classSubjectWeeklyCount.get(getSubjWeeklyKey(cls.id, subjName)) || 0;
           const ratio = targetCount > 0 ? currentWeekly / targetCount : currentWeekly;
-          return { subjName, targetCount, currentWeekly, ratio };
-        })
-        .filter(cand => cand.currentWeekly < cand.targetCount)
-        .sort((a, b) => a.ratio - b.ratio);
 
-        // 1st attempt: Max 2/day constraint
+          const sKey = getSubjDayKey(cls.id, slot.dayName, subjName);
+          const currentDaily = classSubjectDayCount.get(sKey) || 0;
+
+          return { subjName, targetCount, currentWeekly, ratio, currentDaily };
+        })
+        .sort((a, b) => {
+          // Prioritize subjects strictly under target workload
+          const aNeed = a.currentWeekly < a.targetCount;
+          const bNeed = b.currentWeekly < b.targetCount;
+          if (aNeed && !bNeed) return -1;
+          if (!aNeed && bNeed) return 1;
+          // Prioritize subjects with 0 lessons on this day
+          if (a.currentDaily !== b.currentDaily) {
+            return a.currentDaily - b.currentDaily;
+          }
+          // Prioritize lowest ratio
+          return a.ratio - b.ratio;
+        });
+
+        // 1st attempt: Max 2/day constraint strictly enforced
         for (const cand of candidates) {
           const sKey = getSubjDayKey(cls.id, slot.dayName, cand.subjName);
           const currentDaily = classSubjectDayCount.get(sKey) || 0;
-          if (currentDaily >= 2) continue;
+          if (currentDaily >= 2) continue; // STRICTLY NO MORE THAN 2 LESSONS PER DAY PER SUBJECT
 
           const availTeachers = this.getAvailableQualifiedTeachers(
             cand.subjName,
@@ -853,7 +860,8 @@ export class SchedulerEngine {
             slot.block,
             slot.period,
             teacherBusy,
-            teacherAssignedCount
+            teacherAssignedCount,
+            classSubjectAssignedTeacher
           );
 
           if (availTeachers.length > 0) {
@@ -867,6 +875,9 @@ export class SchedulerEngine {
             classSubjectDayCount.set(sKey, currentDaily + 1);
             classSubjectWeeklyCount.set(getSubjWeeklyKey(cls.id, cand.subjName), cand.currentWeekly + 1);
             teacherAssignedCount.set(chosenTeacher.id, (teacherAssignedCount.get(chosenTeacher.id) || 0) + 1);
+            if (!classSubjectAssignedTeacher.has(`${cls.id}_${cand.subjName}`)) {
+              classSubjectAssignedTeacher.set(`${cls.id}_${cand.subjName}`, chosenTeacher.id);
+            }
 
             completeSchedule.push({
               day: slot.day,
@@ -881,50 +892,7 @@ export class SchedulerEngine {
           }
         }
 
-        // 2nd attempt: If daily max 2 was full, try allowing up to 3/day to avoid leaving an empty slot
-        if (!filled) {
-          for (const cand of candidates) {
-            const sKey = getSubjDayKey(cls.id, slot.dayName, cand.subjName);
-            const currentDaily = classSubjectDayCount.get(sKey) || 0;
-            if (currentDaily >= 3) continue;
-
-            const availTeachers = this.getAvailableQualifiedTeachers(
-              cand.subjName,
-              cls,
-              slot.dayName,
-              slot.block,
-              slot.period,
-              teacherBusy,
-              teacherAssignedCount
-            );
-
-            if (availTeachers.length > 0) {
-              availTeachers.sort((t1, t2) => (teacherAssignedCount.get(t1.id) || 0) - (teacherAssignedCount.get(t2.id) || 0));
-              const chosenTeacher = availTeachers[0];
-
-              classIndex.addLesson(cls.id, slot.day, slotIdx);
-              teacherIndex.addLesson(chosenTeacher.id, slot.day, slotIdx);
-              teacherBusy.set(getBusyKey(chosenTeacher.id, slot.dayName, slot.period), cls.id);
-
-              classSubjectDayCount.set(sKey, currentDaily + 1);
-              classSubjectWeeklyCount.set(getSubjWeeklyKey(cls.id, cand.subjName), cand.currentWeekly + 1);
-              teacherAssignedCount.set(chosenTeacher.id, (teacherAssignedCount.get(chosenTeacher.id) || 0) + 1);
-
-              completeSchedule.push({
-                day: slot.day,
-                period: slot.period,
-                classId: cls.id,
-                teacherId: chosenTeacher.id,
-                subjectId: cand.subjName
-              });
-
-              filled = true;
-              break;
-            }
-          }
-        }
-
-        // 3rd attempt: Swap with an occupied slot in `cls` on another day/period to free up a slot for an available teacher
+        // 2nd attempt: Swap with an occupied slot in `cls` on another day/period to free up a slot for an available teacher
         if (!filled) {
           for (const otherSlot of validSlots) {
             const otherSlotIdx = otherSlot.day * 6 + otherSlot.period;
@@ -942,6 +910,9 @@ export class SchedulerEngine {
                 !teacherBusy.has(getBusyKey(existingTeacher.id, slot.dayName, slot.period))) {
 
               for (const cand of candidates) {
+                const sKey = getSubjDayKey(cls.id, otherSlot.dayName, cand.subjName);
+                if ((classSubjectDayCount.get(sKey) || 0) >= 2) continue; // STRICTLY NO MORE THAN 2 LESSONS PER DAY
+
                 const availAtOther = this.getAvailableQualifiedTeachers(
                   cand.subjName,
                   cls,
@@ -949,7 +920,8 @@ export class SchedulerEngine {
                   otherSlot.block,
                   otherSlot.period,
                   teacherBusy,
-                  teacherAssignedCount
+                  teacherAssignedCount,
+                  classSubjectAssignedTeacher
                 );
 
                 if (availAtOther.length > 0) {
@@ -972,10 +944,12 @@ export class SchedulerEngine {
                   teacherIndex.addLesson(newTeacher.id, otherSlot.day, otherSlotIdx);
                   teacherBusy.set(getBusyKey(newTeacher.id, otherSlot.dayName, otherSlot.period), cls.id);
 
-                  const sKey = getSubjDayKey(cls.id, otherSlot.dayName, cand.subjName);
                   classSubjectDayCount.set(sKey, (classSubjectDayCount.get(sKey) || 0) + 1);
                   classSubjectWeeklyCount.set(getSubjWeeklyKey(cls.id, cand.subjName), cand.currentWeekly + 1);
                   teacherAssignedCount.set(newTeacher.id, (teacherAssignedCount.get(newTeacher.id) || 0) + 1);
+                  if (!classSubjectAssignedTeacher.has(`${cls.id}_${cand.subjName}`)) {
+                    classSubjectAssignedTeacher.set(`${cls.id}_${cand.subjName}`, newTeacher.id);
+                  }
 
                   completeSchedule.push({
                     day: otherSlot.day,
@@ -991,73 +965,6 @@ export class SchedulerEngine {
               }
             }
             if (filled) break;
-          }
-        }
-
-        // 4th attempt: Relax soft availability and workload limits for subject candidate teachers without time collision
-        if (!filled) {
-          for (const cand of candidates) {
-            const availTeachers = this.teachers.filter(t => {
-              const teachesSubj = (t.subjects || []).some(s => isSameSubject(s, cand.subjName));
-              if (!teachesSubj) return false;
-              if (teacherBusy.has(getBusyKey(t.id, slot.dayName, slot.period))) return false;
-              return true;
-            });
-
-            if (availTeachers.length > 0) {
-              availTeachers.sort((t1, t2) => (teacherAssignedCount.get(t1.id) || 0) - (teacherAssignedCount.get(t2.id) || 0));
-              const chosenTeacher = availTeachers[0];
-
-              classIndex.addLesson(cls.id, slot.day, slotIdx);
-              teacherIndex.addLesson(chosenTeacher.id, slot.day, slotIdx);
-              teacherBusy.set(getBusyKey(chosenTeacher.id, slot.dayName, slot.period), cls.id);
-
-              const sKey = getSubjDayKey(cls.id, slot.dayName, cand.subjName);
-              const currentDaily = classSubjectDayCount.get(sKey) || 0;
-              classSubjectDayCount.set(sKey, currentDaily + 1);
-              classSubjectWeeklyCount.set(getSubjWeeklyKey(cls.id, cand.subjName), cand.currentWeekly + 1);
-              teacherAssignedCount.set(chosenTeacher.id, (teacherAssignedCount.get(chosenTeacher.id) || 0) + 1);
-
-              completeSchedule.push({
-                day: slot.day,
-                period: slot.period,
-                classId: cls.id,
-                teacherId: chosenTeacher.id,
-                subjectId: cand.subjName
-              });
-
-              filled = true;
-              break;
-            }
-          }
-        }
-
-        // 5th attempt: Use ANY free teacher in school not busy at this slot for a subject that still needs workload
-        if (!filled && candidates.length > 0) {
-          const freeTeachers = this.teachers.filter(t => !teacherBusy.has(getBusyKey(t.id, slot.dayName, slot.period)));
-          if (freeTeachers.length > 0) {
-            freeTeachers.sort((t1, t2) => (teacherAssignedCount.get(t1.id) || 0) - (teacherAssignedCount.get(t2.id) || 0));
-            const chosenTeacher = freeTeachers[0];
-            const chosenSubj = candidates[0].subjName;
-
-            classIndex.addLesson(cls.id, slot.day, slotIdx);
-            teacherIndex.addLesson(chosenTeacher.id, slot.day, slotIdx);
-            teacherBusy.set(getBusyKey(chosenTeacher.id, slot.dayName, slot.period), cls.id);
-
-            const sKey = getSubjDayKey(cls.id, slot.dayName, chosenSubj);
-            classSubjectDayCount.set(sKey, (classSubjectDayCount.get(sKey) || 0) + 1);
-            classSubjectWeeklyCount.set(getSubjWeeklyKey(cls.id, chosenSubj), candidates[0].currentWeekly + 1);
-            teacherAssignedCount.set(chosenTeacher.id, (teacherAssignedCount.get(chosenTeacher.id) || 0) + 1);
-
-            completeSchedule.push({
-              day: slot.day,
-              period: slot.period,
-              classId: cls.id,
-              teacherId: chosenTeacher.id,
-              subjectId: chosenSubj
-            });
-
-            filled = true;
           }
         }
       }

@@ -40,9 +40,12 @@ export const timesOverlap = (start1: string, end1: string, start2: string, end2:
 
 export const getClassShift = (c: SchoolClass): 'matutino' | 'vespertino' | 'ambos' => {
   if (c.shift && c.shift !== 'ambos') return c.shift;
-  const upper = (c.name || '').toUpperCase();
-  if (upper.includes('VESP') || upper.includes('TARDE') || upper.endsWith(' B') || upper.includes(' - B')) return 'vespertino';
-  return 'matutino';
+  const upper = (c.name || '').toUpperCase().trim();
+  if (upper.includes('VESP') || upper.includes('TARDE') || upper.includes('VESPERTINO')) return 'vespertino';
+  if (upper.includes('MAT') || upper.includes('MANHÃ') || upper.includes('MATUTINO')) return 'matutino';
+  if (upper.endsWith('B') || upper.includes(' B ') || upper.endsWith('-B') || upper.endsWith(' B')) return 'vespertino';
+  if (upper.endsWith('A') || upper.includes(' A ') || upper.endsWith('-A') || upper.endsWith(' A')) return 'matutino';
+  return c.shift || 'matutino';
 };
 
 export const is678Grade = (className: string): boolean => {
