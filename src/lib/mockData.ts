@@ -309,9 +309,9 @@ CREATE TABLE IF NOT EXISTS public.equipments (
 
 CREATE TABLE IF NOT EXISTS public.emprestimos_equipamentos (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  equipment_id UUID REFERENCES public.equipments(id) ON DELETE SET NULL,
+  equipment_id TEXT,
   equipment_name TEXT,
-  funcionario_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  funcionario_id TEXT,
   funcionario_nome TEXT DEFAULT 'Funcionário',
   data_retirada TIMESTAMPTZ DEFAULT NOW(),
   observacao_retirada TEXT,

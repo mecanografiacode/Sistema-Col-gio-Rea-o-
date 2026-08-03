@@ -947,27 +947,25 @@ class StorageService {
 
   // --- EQUIPMENT LOANS ---
   public async getEquipmentLoans(equipmentId?: string): Promise<EquipmentLoan[]> {
-    const equipments = this.getItem<Equipment>('cr_equipment');
-    const existingEqIds = new Set(equipments.map((e) => e.id));
-
     const supabase = getSupabaseClient();
     if (supabase) {
       let query = supabase.from('emprestimos_equipamentos').select('*').order('created_at', { ascending: false });
-      if (equipmentId && isUUID(equipmentId)) {
+      if (equipmentId) {
         query = query.eq('equipment_id', equipmentId);
       }
       const { data, error } = await query;
-      if (!error && data && data.length > 0) {
-        return (data as EquipmentLoan[]).filter((l) => existingEqIds.size === 0 || existingEqIds.has(l.equipment_id));
+      if (!error && data) {
+        if (data.length > 0) {
+          return data as EquipmentLoan[];
+        }
       }
     }
-    const items = this.getItem<EquipmentLoan>('cr_equipment_loans');
-    const validItems = items.filter((l) => existingEqIds.has(l.equipment_id));
 
+    const items = this.getItem<EquipmentLoan>('cr_equipment_loans');
     if (equipmentId) {
-      return validItems.filter((l) => l.equipment_id === equipmentId);
+      return items.filter((l) => l.equipment_id === equipmentId);
     }
-    return validItems;
+    return items;
   }
 
   public async addEquipmentLoan(
@@ -987,9 +985,9 @@ class StorageService {
       try {
         await supabase.from('emprestimos_equipamentos').insert([{
           id: newLoan.id,
-          equipment_id: toValidUuidOrNull(newLoan.equipment_id),
+          equipment_id: newLoan.equipment_id,
           equipment_name: newLoan.equipment_name || null,
-          funcionario_id: toValidUuidOrNull(newLoan.funcionario_id),
+          funcionario_id: newLoan.funcionario_id,
           funcionario_nome: newLoan.funcionario_nome || 'Funcionário',
           data_retirada: newLoan.data_retirada || new Date().toISOString(),
           observacao_retirada: newLoan.observacao_retirada || null,
@@ -1033,39 +1031,53 @@ class StorageService {
   ) {
     const items = this.getItem<EquipmentLoan>('cr_equipment_loans');
     const idx = items.findIndex((i) => i.id === loanId);
+    let eqId = '';
     if (idx !== -1) {
-      const eqId = items[idx].equipment_id;
+      eqId = items[idx].equipment_id;
       items[idx].status = 'concluido';
       items[idx].data_devolucao = dataDevolucao || new Date().toISOString();
       items[idx].observacao_devolucao = observacaoDevolucao;
       items[idx].assinatura_devolucao_url = assinaturaDevolucaoUrl;
       this.setItem('cr_equipment_loans', items, false);
+    }
 
-      const supabase = getSupabaseClient();
-      if (supabase && isUUID(loanId)) {
-        await supabase
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      if (!eqId) {
+        const { data: supaLoan } = await supabase
           .from('emprestimos_equipamentos')
-          .update({
-            status: 'concluido',
-            data_devolucao: items[idx].data_devolucao,
-            observacao_devolucao: observacaoDevolucao || null,
-            assinatura_devolucao_url: assinaturaDevolucaoUrl || null
-          })
-          .eq('id', loanId);
+          .select('equipment_id')
+          .eq('id', loanId)
+          .maybeSingle();
+        if (supaLoan) {
+          eqId = supaLoan.equipment_id;
+        }
       }
 
-      // Return equipment status back to 'ativo'
-      await this.updateEquipmentStatus(eqId, 'ativo', actor);
-
-      await this.logAudit(
-        actor,
-        'edicao',
-        'equipamentos',
-        `Devolução Empréstimo ID: ${loanId}`,
-        `Status: em_aberto`,
-        `Status: concluido`
-      );
+      await supabase
+        .from('emprestimos_equipamentos')
+        .update({
+          status: 'concluido',
+          data_devolucao: dataDevolucao || new Date().toISOString(),
+          observacao_devolucao: observacaoDevolucao || null,
+          assinatura_devolucao_url: assinaturaDevolucaoUrl || null
+        })
+        .eq('id', loanId);
     }
+
+    // Return equipment status back to 'ativo'
+    if (eqId) {
+      await this.updateEquipmentStatus(eqId, 'ativo', actor);
+    }
+
+    await this.logAudit(
+      actor,
+      'edicao',
+      'equipamentos',
+      `Devolução Empréstimo ID: ${loanId}`,
+      `Status: em_aberto`,
+      `Status: concluido`
+    );
   }
 
   // --- MATERIAL REQUESTS ---
@@ -1793,6 +1805,35 @@ class StorageService {
           }
         } catch (err: any) {
           console.warn('Exceção ao sincronizar log de auditoria no syncLocalDataToSupabase:', err?.message || err);
+        }
+      }
+
+      // 8. Equipment Loans
+      const loans = this.getItem<EquipmentLoan>('cr_equipment_loans');
+      for (const loan of loans) {
+        try {
+          const payload = {
+            id: ensureValidUuid(loan.id),
+            equipment_id: loan.equipment_id,
+            equipment_name: loan.equipment_name || null,
+            funcionario_id: loan.funcionario_id,
+            funcionario_nome: loan.funcionario_nome || 'Funcionário',
+            data_retirada: loan.data_retirada || new Date().toISOString(),
+            observacao_retirada: loan.observacao_retirada || null,
+            assinatura_retirada_url: loan.assinatura_retirada_url || null,
+            data_devolucao: loan.data_devolucao || null,
+            observacao_devolucao: loan.observacao_devolucao || null,
+            assinatura_devolucao_url: loan.assinatura_devolucao_url || null,
+            status: loan.status || 'em_aberto',
+            created_at: loan.created_at || new Date().toISOString()
+          };
+          const { error } = await supabase.from('emprestimos_equipamentos').upsert([payload]);
+          if (!error) count++;
+          else {
+            console.warn('Erro ao sincronizar empréstimo no Supabase:', error.message);
+          }
+        } catch (err: any) {
+          console.warn('Exceção ao sincronizar empréstimo no Supabase:', err?.message || err);
         }
       }
 
