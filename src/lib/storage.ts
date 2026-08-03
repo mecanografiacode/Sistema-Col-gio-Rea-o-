@@ -1007,7 +1007,7 @@ class StorageService {
 
     const items = this.getItem<EquipmentLoan>('cr_equipment_loans');
     items.unshift(newLoan);
-    this.setItem('cr_equipment_loans', items);
+    this.setItem('cr_equipment_loans', items, false);
 
     // Update equipment status to 'emprestado'
     await this.updateEquipmentStatus(loan.equipment_id, 'emprestado', actor);
@@ -1039,7 +1039,7 @@ class StorageService {
       items[idx].data_devolucao = dataDevolucao || new Date().toISOString();
       items[idx].observacao_devolucao = observacaoDevolucao;
       items[idx].assinatura_devolucao_url = assinaturaDevolucaoUrl;
-      this.setItem('cr_equipment_loans', items);
+      this.setItem('cr_equipment_loans', items, false);
 
       const supabase = getSupabaseClient();
       if (supabase && isUUID(loanId)) {

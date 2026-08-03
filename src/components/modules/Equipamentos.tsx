@@ -153,7 +153,7 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
         type,
         asset_number: assetNumber,
         room_location: roomLocation,
-        acquisition_date: acquisitionDate || new Date().toISOString().split('T')[0],
+        acquisition_date: acquisitionDate || undefined,
         warranty_until: new Date().toISOString().split('T')[0],
         status,
         notes: notes || undefined,
@@ -166,6 +166,7 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
     setName('');
     setAssetNumber('');
     setRoomLocation('');
+    setAcquisitionDate('');
     setNotes('');
     setFotoUrl('');
     loadData();
@@ -189,6 +190,14 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
     }
     if (selectedEquipmentIdsForLoan.length === 0) {
       alert('Selecione pelo menos 1 equipamento para realizar o empréstimo.');
+      return;
+    }
+
+    // Check if any selected equipment is currently loaned out
+    const openLoanEqIds = new Set(allLoans.filter((l) => l.status === 'em_aberto').map((l) => l.equipment_id));
+    const alreadyLoaned = selectedEquipmentIdsForLoan.filter((id) => openLoanEqIds.has(id));
+    if (alreadyLoaned.length > 0) {
+      alert('Um ou mais equipamentos selecionados já possuem um empréstimo em aberto e ainda não foram devolvidos!');
       return;
     }
 
@@ -291,6 +300,7 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
 
   // Filtered Equipment List for Inventory
   const openLoans = allLoans.filter((l) => l.status === 'em_aberto');
+  const openLoanEquipmentIds = new Set(openLoans.map((l) => l.equipment_id));
 
   const filteredInventoryList = equipmentList.filter((e) => {
     const matchesSearch =
@@ -298,11 +308,16 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
       e.asset_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
       e.room_location.toLowerCase().includes(searchQuery.toLowerCase());
 
+    const isLoaned = e.status === 'emprestado' || openLoanEquipmentIds.has(e.id);
+
     if (selectedStatus === 'em_aberto_emprestimos') {
-      return matchesSearch && e.status === 'emprestado';
+      return matchesSearch && isLoaned;
     }
 
-    const matchesStatus = selectedStatus === 'todos' || e.status === selectedStatus;
+    const matchesStatus =
+      selectedStatus === 'todos' ||
+      (selectedStatus === 'emprestado' ? isLoaned : (selectedStatus === 'ativo' ? (e.status === 'ativo' && !isLoaned) : e.status === selectedStatus));
+
     const matchesQr = !qrInput || e.asset_number.toLowerCase().includes(qrInput.toLowerCase());
     return matchesSearch && matchesStatus && matchesQr;
   });
@@ -311,6 +326,7 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
   const availableEquipmentsForLoan = equipmentList.filter(
     (e) =>
       e.status === 'ativo' &&
+      !openLoanEquipmentIds.has(e.id) &&
       (e.name.toLowerCase().includes(loanSearchEq.toLowerCase()) ||
         e.asset_number.toLowerCase().includes(loanSearchEq.toLowerCase()) ||
         e.room_location.toLowerCase().includes(loanSearchEq.toLowerCase()))
@@ -560,7 +576,7 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
                         >
                           <Maximize2 className="w-3.5 h-3.5" />
                         </button>
-                        {getStatusBadge(eq.status)}
+                        {getStatusBadge(currentOpenLoan ? 'emprestado' : eq.status)}
                       </div>
                     </div>
                   ) : (
@@ -571,7 +587,7 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
                           {eq.asset_number}
                         </span>
                       </div>
-                      {getStatusBadge(eq.status)}
+                      {getStatusBadge(currentOpenLoan ? 'emprestado' : eq.status)}
                     </div>
                   )}
 
@@ -1235,17 +1251,6 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Data de Aquisição</label>
-                <input
-                  type="date"
-                  required
-                  value={acquisitionDate}
-                  onChange={(e) => setAcquisitionDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600"
-                />
-              </div>
-
-              <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Observações de Fatura / Fornecedor</label>
                 <textarea
                   rows={2}
@@ -1357,7 +1362,13 @@ export const Equipamentos: React.FC<EquipamentosProps> = ({ currentUser }) => {
                   <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
                     <div>
                       <p className="text-[10px] text-slate-400 uppercase font-bold">Status do Patrimônio</p>
-                      <div className="mt-1">{getStatusBadge(selectedEquipment.status)}</div>
+                      <div className="mt-1">
+                        {getStatusBadge(
+                          allLoans.some((l) => l.equipment_id === selectedEquipment.id && l.status === 'em_aberto')
+                            ? 'emprestado'
+                            : selectedEquipment.status
+                        )}
+                      </div>
                     </div>
 
                     {isAdmin && (
