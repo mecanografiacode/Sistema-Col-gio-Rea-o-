@@ -11,8 +11,7 @@ import {
   Bell,
   Grid,
   X,
-  ChevronRight,
-  CalendarClock
+  ChevronRight
 } from 'lucide-react';
 
 export type NavTab =
@@ -23,8 +22,7 @@ export type NavTab =
   | 'suporte_tecnico'
   | 'auditoria'
   | 'usuarios'
-  | 'notificacoes'
-  | 'editor_horarios';
+  | 'notificacoes';
 
 interface NavigationProps {
   activeTab: NavTab;
@@ -100,14 +98,6 @@ export const Navigation: React.FC<NavigationProps> = ({
       description: 'Controle de acesso, perfis e permissões da equipe escolar.',
       icon: Users,
       visible: isSuperAdmin
-    },
-    {
-      id: 'editor_horarios' as NavTab,
-      label: 'Editor de Horários',
-      shortLabel: 'Horários',
-      description: 'Gestão de professores, disciplinas e grade de horários.',
-      icon: CalendarClock,
-      visible: true
     },
     {
       id: 'notificacoes' as NavTab,
